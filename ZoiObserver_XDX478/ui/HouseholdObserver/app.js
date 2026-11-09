@@ -1,6 +1,6 @@
 (function () {
  'use strict';
- var VERSION='0.4.3', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.4.4', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var busy=false, epoch=0, index=0, cache={}, profiles={}, rows={}, logs=[], members=[], lastReport=0;
  var status='Start를 누르면 현재 가구를 자동 관리합니다.', errors=0, lastGame=null;
  var caps={}, snapshots={}, lastCycle=0, popupRows={}, lastPopup=null, blockedPopup=null;
@@ -63,7 +63,9 @@
    if(p.repairStatus)html+='<p>집 수리 · '+esc(p.repairStatus)+'</p>';
    if(p.marketStatus)html+='<p>포켓마켓 · '+esc(p.marketStatus)+'</p>';
    if(p.goalPlans&&p.goalPlans.length)html+='<p>소망 (만료가 가까운 순)</p>'+p.goalPlans.map(function(g,i){
-    return '<p>'+String(i+1)+'. '+esc(g.name)+' · '+esc(g.status)+'</p>';
+    return '<p>'+String(i+1)+'. '+esc(g.name)+' · '+esc(g.status)+'</p>'+
+     (g.memory&&g.memory.next?'<p class="help">다음: '+esc(g.memory.next)+
+      (g.memory.evidence?' · 확인: '+esc(g.memory.evidence):'')+'</p>':'');
    }).join('');
    if(p.ambition)html+='<p>야망 '+esc(p.ambition.name)+' · '+p.ambition.step+'단계</p>'+
     p.ambition.plans.map(function(g){return '<p>'+esc(g.label||g.name)+' · '+esc(g.status)+'</p>';}).join('');
@@ -216,7 +218,7 @@
   return cli(name,args);
  }
  async function report(manual){
-  var payload={version:VERSION,created:new Date().toISOString(),enabled:state.enabled,scope:state.scope,background:state.background,household:state.household,status:status,game:lastGame,popup:blockedPopup,travel:state.travel,news:panels.latestNews(),members:members,snapshots:snapshots,decisions:state.people,capabilities:caps,logs:logs,last_cycle:lastCycle};
+  var payload={version:VERSION,created:new Date().toISOString(),enabled:state.enabled,scope:state.scope,background:state.background,household:state.household,status:status,game:lastGame,popup:blockedPopup,travel:state.travel,awayTravel:state.awayTravel,news:panels.latestNews(),members:members,snapshots:snapshots,decisions:state.people,capabilities:caps,logs:logs,last_cycle:lastCycle};
   await cli('uimod.cfg_save',{mod_id:wf.MOD_ID,section:'ui/'+wf.APP_NAME+'/saved',key:manual?'observer-report':'observer-auto',value:JSON.stringify(payload)});
   lastReport=Date.now();return payload;
  }
@@ -447,7 +449,7 @@
     var relationship=await cli('relationships.get_value_between',{owner_id:id,target_id:targetId});
     var related=onlyGoal?await life.goalConversation(decision,available.interactions,other,minute,onlyGoal):null;
     if(onlyGoal&&!related)continue;
-    if(!related&&await life.affection(member,other,decision,snapshot,available.interactions,relationship,minute,token))return;
+    if(!related&&await life.affection(member,other,decision,snapshot,available.interactions,relationship,minute,token))return true;
     if(!related&&!wantsRelationship&&!socialNeed)continue;
     var choice=related?related.action:conversationChoice(available.interactions,relationship,decision,targetId,minute);
     if(!choice)continue;
@@ -494,8 +496,8 @@
   }
   var stats=await cli('stat.get_all',args),queue=await cli('interaction.get_queue',args),hope=await cli('hope.list',args),work=await cli('career.get_work_status',args);
   if(!stats.stats||!Array.isArray(hope.selected))throw Error('욕구 또는 소망 응답 형식 변경');
-  if(!profiles[id]||profiles[id].day!==time.day){
-   profiles[id]={day:time.day,trait:await cli('entity.reflect',{entity_id:id,Component:'Trait'}),skills:await cli('skill.get_all',args)};
+  if(!profiles[id]||profiles[id].day!==time.day||minute<profiles[id].minute||minute-profiles[id].minute>=60){
+   profiles[id]={day:time.day,minute:minute,trait:await cli('entity.reflect',{entity_id:id,Component:'Trait'}),skills:await cli('skill.get_all',args)};
   }
   var profile=profiles[id],low=P.lowest(stats.stats), note='자율 행동 개인 설정 '+auto.label;
   if(auto.value===false&&String(lastGame.possessed_entity_id)!==id)note='꺼짐 상태. 이 조이를 선택하면 켜기를 시도합니다.';
@@ -573,7 +575,8 @@
    if(await life.sideIncome(m,character,p,p.lifePlan,snapshots[id],profile.skills.skills||[],minute,token))return;
    if(await life.outing(m,character,p,snapshots[id],time,minute,token))return;
   }catch(e){log(m.first_name+': 활동 보류 - '+e.message);}
-  await talk(m,character,p,minute,token,snapshots[id]);
+  if(await talk(m,character,p,minute,token,snapshots[id]))return;
+  if(!L.relaxed(queue))return;
   if(!state.enabled||token!==epoch)return;
   if(!m.has_career&&m.employable!==true)return;
   if(m.has_career&&!/^(Youth|YoungAdult|Adult|Old|Elder)$/.test(m.age_group||''))return;
@@ -612,7 +615,7 @@
   log(m.first_name+': '+best.opening.job_name+' 변경 확인');
  }
  async function cycle(){
-  if(busy)return;busy=true;var token=epoch;
+  if(busy||watching)return;busy=true;var token=epoch;
   try{
    lastGame=await cli('game.get_state');
    if(lastGame.phase!=='in_game'||lastGame.loading){status='게임 로딩/생활 진입 대기';return;}
@@ -669,13 +672,13 @@
   finally{busy=false;render();}
  }
  async function watchChoice(){
-  if(!state.enabled||checkingPopup||watching||!lastGame||lastGame.phase!=='in_game')return;
+  if(!state.enabled||busy||checkingPopup||watching||!lastGame||lastGame.phase!=='in_game')return;
   watching=true;
   var token=epoch;
   try{
    var game=await cli('game.get_state');
    if(game.phase!=='in_game'||game.loading||game.map_id!==lastGame.map_id)return;
-   if(state.travel){
+   if(state.travel&&state.travel.stage!=='unconfirmed'){
     if(!busy){
      busy=true;
      try{await travel.advance(game,await cli('environment.get_time'),token);}
@@ -714,7 +717,13 @@
  };
  document.getElementById('stop').onclick=function(){if(!state.enabled)return;state.enabled=false;epoch++;log('자동 명령 중지.');};
  document.getElementById('report').onclick=function(){report(true).then(function(){log('수동 진단 저장 완료: saved/observer-report.cfg');}).catch(function(e){log('진단 저장 실패: '+e.message);});};
- window._onStateLoaded=function(){epoch++;init();profiles={};snapshots={};index=0;log('저장된 관찰 설정을 불러왔습니다.');};
+ window._onStateLoaded=function(){
+  epoch++;init();profiles={};snapshots={};cache={};index=0;calendar=null;lastGame=null;rosterAt=0;
+  members=[];playedGroups=[];rosterMap='';
+  lastPopup=null;blockedPopup=null;popupTries=0;nextPopupTry=0;scheduleCancel=null;
+  life.reset();panels.reset();
+  log('저장된 관찰 설정을 불러왔습니다. 목표와 현재 게임 상태를 다시 확인합니다.');
+ };
  log(VERSION+' 준비. 다른 작업 모드와 행동 결과를 확인합니다.');
  render();setInterval(cycle,10000);setInterval(watchChoice,1500);setTimeout(cycle,2500);
 })();

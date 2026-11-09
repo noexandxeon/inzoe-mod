@@ -1,6 +1,6 @@
 (function (root) {
  'use strict';
- var L=root.ObserverLife, P=root.ObserverPolicy;
+ var L=root.ObserverLife, P=root.ObserverPolicy, M=root.ObserverGoalMemory;
 
  function create(api){
   var cli=api.cli, write=api.write, log=api.log, state=api.state;
@@ -60,7 +60,8 @@
     catch(_){continue;}
     var action=choose(available.interactions||[],target);
     if(!action)continue;
-    await write('interaction.execute',{entity_id:id,target_entity_id:target,interaction_bag_id:action.interaction_bag_id},token);
+    try{await write('interaction.execute',{entity_id:id,target_entity_id:target,interaction_bag_id:action.interaction_bag_id},token);}
+    catch(e){e.observerBag=action.interaction_bag_id;e.observerTarget=target;throw e;}
     return Object.assign({},action,{observer_target:target});
    }
    return null;
@@ -235,9 +236,10 @@
    return mission&&Array.isArray(mission.conditionStates)?
     mission.conditionStates.map(function(s){return s.currentCount+'/'+s.goalCount;}).join(', '):null;
   }
-  function trackGoal(decision,plan,bag,target,minute,progress){
+  function trackGoal(decision,plan,bag,target,minute,progress,practice){
+   M.started(decision,plan,minute,practice&&practice.skill);
    decision.goal={name:plan.name,kind:plan.kind,instance:plan.instance,bag:bag,target:target,at:minute,
-    sentAt:Date.now(),progress:missionProgress(progress)};
+    sentAt:Date.now(),progress:missionProgress(progress),practice:practice||null};
   }
   async function reviewGoal(member,decision,snapshot,minute){
    if(!decision.goal)return;
@@ -250,31 +252,52 @@
    var mission=data.missionMap&&data.missionMap['(Value='+goal.instance+')'];
    var ambition=goal.kind==='ambition', label=ambition?'야망 목표':'소망';
    var plans=ambition&&decision.ambition?decision.ambition.plans:decision.goalPlans;
-   var plan=(plans||[]).find(function(p){return p.instance===goal.instance;});
+   var plan=(plans||[]).find(function(p){return p.instance===goal.instance&&p.name===goal.name;})||goal;
    var progress=missionProgress(mission);
+   var growth=false;
+   if(goal.practice){
+    var skills=await cli('skill.get_all',{entity_id:String(member.entity_id)});
+    var skill=(skills.skills||[]).find(function(s){return s.id===goal.practice.skill;});
+    if(skill&&Number.isFinite(skill.level)&&skill.level>goal.practice.level){
+     growth=true;
+     var memory=M.record(decision,plan,minute);
+     memory.evidence=goal.practice.skill+' Lv.'+goal.practice.level+' → '+skill.level;
+     if(goal.practice.observed!==skill.level){
+      goal.practice.observed=skill.level;
+      log(named(member)+': 실제 기술 성장 확인 / '+memory.evidence);
+     }
+    }
+   }
    if(mission&&mission.bIsFinished){
-    if(plan)plan.status='완료 확인';
+    M.note(decision,plan,'completed','완료 확인','다음 목표 확인',minute);
     log(named(member)+': '+label+' 완료 확인 / '+goal.name);
     decision.nextHopeAction=minute;
     if(ambition)decision.nextAmbition=minute;
    }else if(!ambition&&!snapshot.hope.selected.some(function(h){return h.hope_id===goal.name;})){
-    if(plan)plan.status='게임 목록에서 종료 · 완료 여부 미확인';
+    M.note(decision,plan,'ended','게임 목록에서 종료 · 완료 여부 미확인','새 목표 확인',minute);
     log(named(member)+': 소망 목록에서 사라짐 / '+goal.name+' (완료 여부 미확인)');
-   }else if(goal.progress!=null&&progress!==null&&progress!==goal.progress){
-    if(plan)plan.status='진행 확인 '+progress;
-    log(named(member)+': '+label+' 진행 / '+goal.name+' '+progress);
    }else if(ambition&&!mission){
     decision.nextAmbition=minute;
-   }else if(playing){
-    if(plan)plan.status='게임 행동 진행 중';
-    return;
+   }else if(playing||growth||goal.progress!=null&&progress!==null&&progress!==goal.progress){
+    var changed=goal.progress!=null&&progress!==null&&progress!==goal.progress;
+    M.note(decision,plan,goal.practice?'preparing':'running',
+     changed?'진행 확인 '+progress:growth?'실제 기술 성장 확인':'게임 행동 진행 중',
+     goal.practice?'연습 종료 후 원래 소망 재평가':'현재 행동 종료 후 조건 재확인',minute);
+    if(changed){
+     log(named(member)+': '+label+' 진행 / '+goal.name+' '+progress);
+     goal.progress=progress;
+    }
+    if(playing)return;
    }else if(!goal.seen&&(Date.now()-(goal.sentAt||0)<20000||
      goal.at!=null&&minute-goal.at<(snapshot.queue.queue_count>0?90:30))){
-    if(plan)plan.status=snapshot.queue.queue_count>0?'행동 대기열 확인 중':'행동 시작 확인 중';
+    M.note(decision,plan,'running',snapshot.queue.queue_count>0?'행동 대기열 확인 중':'행동 시작 확인 중','실제 행동 시작 확인',minute);
     return;
    }else{
-    var reason=goal.seen?'행동 후 조건 진행 없음':'행동 대기열 등록 또는 시작 미확인';
-    if(plan)plan.status=reason+' · 다른 행동 또는 대상 재시도';
+    var reason=goal.practice&&goal.seen?'연습 종료 · 기술 레벨 변화 미확인 (경험치 확인 필요)':
+     goal.seen?'행동 후 조건 진행 없음':'행동 대기열 등록 또는 시작 미확인';
+    // A short practice can earn XP without a level-up. Do not call it a failed action.
+    if(goal.practice&&goal.seen)M.note(decision,plan,'preparing',reason,'일상 병행 후 다른 연습 대상 재검토',minute);
+    else M.failed(decision,plan,goal.bag,goal.target,minute,reason);
     var skipped=decision.goalRetry||(decision.goalRetry={});
     skipped[goal.name]={bag:goal.bag,target:goal.target,until:minute+90};
     decision.nextHopeAction=minute;
@@ -309,7 +332,8 @@
     Speaking:[/Mirror/i,/^.*(?:Speech|PublicSpeaking|PracticeSpeaking).*$/i],
     Charisma:[/Mirror/i,/^.*(?:Charisma|Confidence|Speech|Appeal).*$/i],
     Logic:[/Chess|Computer|Bookcase|Bookshelf/i,/^(?:Use_|Computer_|Bookshelf_|Play_).*(?:Logic|Chess|CriticalThinking)/i],
-    Housework:[/^(?:Mop\d|Broom\d|VacuumCleaner)/i,/^(?:Object_Mopping_Home|Object_.*(?:Sweep|Vacuum).*Home)$/]
+    Housework:[/^(?:Mop\d|Broom\d|VacuumCleaner)/i,/^(?:Object_Mopping_Home|Object_.*(?:Sweep|Vacuum).*Home)$/],
+    HandCraft:[/Workbench|WorkTable|Craft|Woodwork/i,/^(?!.*(?:Buy|Sell|Purchase|Destroy|Fail)).*(?:HandCraft|Woodwork|CraftPractice|Craft_Practice)/i]
    }[skill];
   }
   async function prepareGoals(member,decision,minute,selected){
@@ -343,6 +367,7 @@
    decision.goalPlans=plans;
    decision.goalScanMinute=minute;
    decision.goalSignature=signature;
+   M.sync(decision,plans,minute);
    return plans;
   }
   async function visitForGoal(member,character,condition,snapshot,time,token){
@@ -403,6 +428,7 @@
    var id=String(member.entity_id), playing=await cli('ambition.get',{entity_id:id});
    if(!playing.is_playing||!playing.playing_ambition_item_id||playing.is_all_completed){
     if(decision.ambition&&playing.is_all_completed)log(named(member)+': 야망 완료 확인 / '+decision.ambition.name);
+    M.sync(decision,[],minute,'ambition');
     decision.ambition=null;return null;
    }
    var name=playing.playing_ambition_item_id, step=playing.current_step;
@@ -427,6 +453,7 @@
    var localized=await cli('l10n.get',{Keys:JSON.stringify(keys.filter(Boolean))});
    plans.forEach(function(plan){plan.label=localized[plan.textKey]||plan.name;});
    if(decision.ambition&&decision.ambition.id===name&&step>decision.ambition.step)log(named(member)+': 야망 '+step+'단계 진입 확인');
+   M.sync(decision,plans,minute,'ambition');
    return decision.ambition={id:name,name:localized[native.displayTextId]||name,step:step,plans:plans};
   }
   async function pursueAmbition(member,character,decision,snapshot,time,minute,token,tryConversation){
@@ -440,7 +467,7 @@
    var local, nearby, offers=Object.create(null), missions=plans.length?await readAt(member.entity_id,'Mission'):{};
    for(var i=0;i<plans.length;i++){
     var plan=plans[i], progress=missions.missionMap&&missions.missionMap['(Value='+plan.instance+')'], label=plan.kind==='ambition'?'야망':'소망';
-    if(progress&&progress.bIsFinished){plan.status='완료 확인';continue;}
+    if(progress&&progress.bIsFinished){M.note(decision,plan,'completed','완료 확인','다음 목표 확인',minute);continue;}
     if(plan.kind==='ambition'&&(!progress||!progress.bIsActive)){
      plan.status='게임에서 미션 활성화 대기';continue;
     }
@@ -466,14 +493,29 @@
       plan.status='관계·대화 조건 또는 상대 대기';continue;
      }
      var practice=type==='SkillLevel'?training(condition.conditionId1):null;
+     var skillBaseline=null;
+     if(practice){
+      if(!M.practiceAllowed(decision,plan,minute)){
+       M.note(decision,plan,'waiting','오늘 준비 연습 3회 · 일상생활 우선','다음 게임 날짜에 연습 재검토',minute);continue;
+      }
+      var skillData=await cli('skill.get_all',{entity_id:String(member.entity_id)});
+      var currentSkill=(skillData.skills||[]).find(function(s){return s.id===condition.conditionId1;});
+      if(!currentSkill||!Number.isFinite(currentSkill.level)){
+       M.note(decision,plan,'unsupported','현재 기술 수치 확인 필요 / '+condition.conditionId1,'게임 기술 응답 확인',minute);continue;
+      }
+      skillBaseline={skill:currentSkill.id,level:currentSkill.level};
+      M.note(decision,plan,'preparing',condition.conditionId1+' Lv.'+currentSkill.level+' · 준비 연습 탐색',
+       '가능한 행동 실행 후 실제 기술 성장 확인',minute);
+     }
      if(type==='AddEntityTagCount'&&condition.conditionId1==='Stay_CheckIn'){
-      plan.status='실제 숙소 체크인 필요';continue;
+      M.note(decision,plan,'waiting','실제 숙소 체크인 필요','현지 체크인 행동과 게임 미션 진행 확인',minute);continue;
      }
      var bags=type==='AddBuffCount'&&condition.conditionId1==='Buff_GetLicense_Delivery'?
       ['Computer_Use_GetLicense_Delivery','Laptop_Use_GetLicense_Delivery']:
       isInteractionGoal(type)?await matchGoalBags(condition.conditionId1):[];
      if(!practice&&!bags.length){
-      plan.status='실행 연결 대기 / '+type+' '+condition.conditionId1;continue;
+      M.note(decision,plan,'unsupported','실행 연결 대기 / '+type+' '+condition.conditionId1,
+       '게임에서 가능한 실행 경로 확인',minute);continue;
      }
      if(local===undefined)local=await inventory(member,character);
      var items=local?local.objects:[];
@@ -503,15 +545,20 @@
      try{
       action=await objectAction(member,targets,function(choices,target){
        return choices.find(function(a){
-        return canAttempt(a)&&!(retry&&retry.until>minute&&retry.bag===a.interaction_bag_id&&String(retry.target)===target)&&
+        return canAttempt(a)&&M.allowed(decision,plan,a.interaction_bag_id,target,minute)&&
+         !(retry&&retry.until>minute&&retry.bag===a.interaction_bag_id&&String(retry.target)===target)&&
          (practice?practice[1].test(a.interaction_bag_id):bags.indexOf(a.interaction_bag_id)>=0);
        });
       },token,offers);
-     }catch(e){plan.status='게임이 행동을 받지 않음 / '+e.message;continue;}
+     }catch(e){
+      if(e.observerBag)M.failed(decision,plan,e.observerBag,e.observerTarget,minute,'게임 행동 응답 확인 필요 / '+e.message);
+      else M.note(decision,plan,'waiting','게임이 행동을 받지 않음 / '+e.message,'게임 상태 변경 후 재검토',minute);
+      continue;
+     }
      plan.status=action?label+' 행동 실행 요청':!targets.length?'조건에 맞는 대상이 근처에 없음':
       '근처 대상에서 사용할 수 있는 행동 없음';
      if(action){
-      trackGoal(decision,plan,action.interaction_bag_id,action.observer_target,minute,progress);
+      trackGoal(decision,plan,action.interaction_bag_id,action.observer_target,minute,progress,skillBaseline);
       log(named(member)+'의 '+label+' 행동 요청: '+action.display_name);
       return true;
      }
@@ -529,6 +576,7 @@
      }
      if(decision.outing&&decision.outing.goalVisit===plan.name)
       plan.status='대체 장소에서 이용 가능한 '+condition.conditionId1+' 행동 확인 중';
+     M.note(decision,plan,'waiting',plan.status,practice?'대체 연습 대상·장소 재탐색':'조건·대상 변경 후 재탐색',minute);
     }
    }
    return false;
@@ -544,7 +592,7 @@
      if(!isInteractionGoal(c.conditionType))continue;
      if(c.conditionType==='InteractionBagCountAtFamilyRelationshipType')continue;
      var bags=await matchGoalBags(c.conditionId1);
-     var chosen=available.find(function(a){return canAttempt(a)&&bags.indexOf(a.interaction_bag_id)>=0&&
+     var chosen=available.find(function(a){return canAttempt(a)&&M.allowed(decision,plan,a.interaction_bag_id,other.entity_id,minute)&&bags.indexOf(a.interaction_bag_id)>=0&&
       !(retry&&retry.until>minute&&retry.bag===a.interaction_bag_id&&String(retry.target)===String(other.entity_id))&&
       !/(?:Marriage|Propose|Confession)/i.test(a.interaction_bag_id);});
      if(chosen)return {action:chosen,plan:plan,progress:goal&&goal.progress};
@@ -922,7 +970,8 @@
     }
    }
   }
-  return {needs:needs,clean:clean,repair:repair,parcels:parcels,marketNeed:marketNeed,reviewGoal:reviewGoal,trackGoal:trackGoal,prepareGoals:prepareGoals,attend:attend,
+  function reset(){sites=null;householdCache={};homeCache={};houseTasks={};repairs={};}
+  return {reset:reset,needs:needs,clean:clean,repair:repair,parcels:parcels,marketNeed:marketNeed,reviewGoal:reviewGoal,trackGoal:trackGoal,prepareGoals:prepareGoals,attend:attend,
    pursueHope:pursueHope,prepareAmbition:prepareAmbition,pursueAmbition:pursueAmbition,
    affection:affection,goalConversation:goalConversation,
    occupation:occupation,sideIncome:sideIncome,outing:outing,vacation:vacation,householdPlan:householdPlan,furnish:furnish,move:move};

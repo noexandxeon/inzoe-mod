@@ -405,6 +405,8 @@
     inzoi.saveState.onLoad(function (json) {
         try {
             var saved = JSON.parse(json);
+            if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return;
+            Object.keys(_appState).forEach(function (key) { delete _appState[key]; });
             for (var k in saved) {
                 if (saved.hasOwnProperty(k)) {
                     _appState[k] = saved[k];

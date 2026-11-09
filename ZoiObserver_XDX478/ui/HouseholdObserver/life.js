@@ -32,7 +32,7 @@
  }
  function relaxed(queue){
   var bag=queue.current&&queue.current.interaction_bag_id;
-  return (queue.queue_count||0)<=1&&(!bag||
+  return (queue.queue_count||0)===0&&(!bag||
     /^(?:Self_Idle_|Use_SmartPhone_|Use_TV_|Self_SmartPhone_|Bookshelf_SitRead_|Self_SLM_(?:Read|Watch)_)/i.test(bag));
  }
  function sleeping(queue,work){

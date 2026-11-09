@@ -173,7 +173,7 @@
   async function advance(game,time,token){
    var trip=state.travel;
    if(!trip||!api.active(token))return false;
-   if(trip.stage==='submitted'){
+   if(trip.stage==='submitted'||trip.stage==='unconfirmed'){
     if(game.map_id===trip.destination&&game.map_id!==trip.origin){
      var family=await cli('household.get_members');
      var member=(family.members||[]).find(function(m){return String(m.entity_id)===trip.actor||
@@ -184,14 +184,39 @@
       p.vacation.trips.push({day:trip.day,city:trip.destination,room:trip.room,party:trip.party});
      state.lastTravelCity=state.lastTravelCity||{};
      state.lastTravelCity[trip.household]=trip.destination;
+     var wallet;
+     try{wallet=L.dayBudget(await cli('entity.reflect',{entity_id:String(family.household_id),Component:'Currency'}),family.members.length);}
+     catch(_){}
+     var balance=wallet&&wallet.cash;
+     var paid=Number.isFinite(trip.balanceBefore)&&Number.isFinite(balance)&&trip.balanceBefore-balance===trip.price;
+     var joined=[];
+     for(var j=0;j<(trip.companions||[]).length;j++){
+      var person=trip.companions[j], matches=(family.members||[]).filter(function(m){
+       return String(m.entity_id)===person.id||m.last_name+' '+m.first_name===person.name;
+      }), present=null;
+      if(matches.length===1){
+       try{
+        var city=(await cli('entity.reflect',{entity_id:String(matches[0].entity_id)})).locatedCityName;
+        if(typeof city==='string'&&city)present=city===trip.destination;
+       }
+       catch(_){}
+      }
+      joined.push({name:person.name,present:present});
+     }
      state.awayTravel={household:trip.household,awayHousehold:String(family.household_id),actor:trip.actor,
-      actorName:trip.actorName,origin:trip.origin,destination:trip.destination};
-     describe(trip,'도시 도착 확인 · 선택한 숙소 '+trip.room);
+      actorName:trip.actorName,origin:trip.origin,destination:trip.destination,room:trip.room,price:trip.price,
+      balanceBefore:trip.balanceBefore,balanceAfter:balance,paymentEvidence:paid?'matching-balance-change':'unconfirmed',
+      companions:joined,checkIn:'unconfirmed'};
+     describe(trip,'도시 도착 확인 · '+(paid?'예약액과 잔액 차이 일치':'결제 확인 대기')+' · 체크인 확인 필요');
      api.log('도시 여행 도착 확인 · '+trip.room+' · '+trip.party+'명');
      state.travel=null;return false;
     }
-    if(Date.now()-trip.submitted>120000){forget(trip,'여행 요청 결과 미확인 · 같은 예약 재요청 보류');}
-    return true;
+    if(trip.stage==='submitted'&&Date.now()-trip.submitted>120000){
+     trip.stage='unconfirmed';
+     describe(trip,'여행 요청 결과 미확인 · 같은 예약 재요청 보류');
+     api.log('여행 요청 결과 미확인 · 생활 관찰을 이어가며 도시 도착 재확인');
+    }
+    return trip.stage!=='unconfirmed';
    }
    if(String(game.possessed_entity_id)!==trip.actor||game.map_id!==trip.origin){forget(trip,'여행 준비 중 조이가 변경됨');return false;}
    if(state.background){describe(trip,'도시 여행 화면 선택 대기 · 다른 작업 모드');return true;}
@@ -347,6 +372,7 @@
      await click(review.pending.ref,trip,token,false);
      describe(trip,'출발 안내 확인 중');return true;
     }
+    trip.balanceBefore=bookingFunds.cash;
     trip.stage='submitted';trip.submitted=Date.now();
     await click(review.confirm.ref,trip,token,false);
     describe(trip,'숙소 예약 요청 · 도시 이동 확인 대기');

@@ -421,11 +421,14 @@
         spam:/Spam|Marketing|Advertising/i.test(info)});
       }
       if(best&&best.payment){
-       var amounts=thread.filter(function(n){return n.role==='text'&&/(?:납부 금액|청구 금액|이자 금액|Amount due)/i.test(n.text||'');})
-        .map(function(n){return C.clean(n.text).match(/\d[\d,]*/g)||[];}).reduce(function(a,b){return a.concat(b);},[]);
-       var wallet=await reflect(member.household_id,'Currency'), amount=amounts.length===1?Number(amounts[0].replace(/,/g,'')):NaN;
+       var wallet=await reflect(member.household_id,'Currency'), amount=C.paymentAmount(thread);
        var balance=wallet.currencyMap&&wallet.currencyMap.mew;
-       if(!(amount>0)||!Number.isFinite(balance)||balance<amount)best=null;
+       var payments=decision.payments||(decision.payments={}), paymentKey=C.messageKey(item);
+       if(payments[paymentKey]||!message.timestamp||!message.messageId||!(amount>0)||!Number.isFinite(balance)||balance<amount)best=null;
+       else{
+        payments[paymentKey]={thread:item.key,messageId:message.messageId,timestamp:message.timestamp,
+         amount:amount,balanceBefore:balance,phase:'requested',minute:minute};
+       }
       }
       if(best){
        sent=await click(best.button,token,id);
@@ -440,15 +443,31 @@
       if(read>0){processed=true;log(member.first_name+': '+name+' 메시지 '+read+'건 읽음 확인');}
       var previous=item.history.filter(function(m){return m.bIsSend;}).pop();
       var outgoing=history.filter(function(m){return m.bIsSend;}).pop();
+      if(sent&&best&&best.payment){
+       var payment=decision.payments[C.messageKey(item)];
+       var paidWallet=await reflect(member.household_id,'Currency');
+       payment.balanceAfter=paidWallet.currencyMap&&paidWallet.currencyMap.mew;
+       payment.matchingBalanceChange=Number.isFinite(payment.balanceAfter)&&payment.balanceBefore-payment.balanceAfter===payment.amount;
+       payment.responseConfirmed=history.some(function(m){
+        return m.timestamp===message.timestamp&&m.messageId===message.messageId&&m.bNeedResponse===false;
+       });
+       payment.phase=payment.responseConfirmed?'response-confirmed':'unconfirmed';
+       log(member.first_name+': 납부 응답 '+(payment.responseConfirmed?'반영 확인':'결과 확인 대기')+
+        (payment.matchingBalanceChange?' · 청구액과 잔액 차이 일치':' · 결제 내역 확인 필요'));
+      }
       if(sent&&outgoing&&(!previous||outgoing.timestamp!==previous.timestamp||outgoing.messageId!==previous.messageId)){
+       if(decision.replyPending)delete decision.replyPending[item.key];
        processed=true;log(member.first_name+': '+name+' 답장 발송 확인 / '+C.clean(best.button.text));
       }else if(sent&&history.some(function(m){
        return m.timestamp===message.timestamp&&m.messageId===message.messageId&&m.bNeedResponse===false;
       })){
+       if(decision.replyPending)delete decision.replyPending[item.key];
        processed=true;log(member.first_name+': '+name+' 응답 상태 반영 / '+C.clean(best.button.text));
       }else if(item.needsReply){
        var pending=decision.replyPending||(decision.replyPending={});
-       var reason=sent?'발송 기록 확인 대기':choices.length?'선택 가능한 답장 확인 대기':'답장 버튼이 아직 없음';
+       var priorPayment=decision.payments&&decision.payments[C.messageKey(item)];
+       var reason=priorPayment?'납부 요청 결과 확인 대기 · 중복 요청 보류':
+        sent?'발송 기록 확인 대기':choices.length?'선택 가능한 답장 확인 대기':'답장 버튼이 아직 없음';
        attempts[item.key].until=minute+20;
        if(pending[item.key]!==reason){pending[item.key]=reason;log(member.first_name+': '+name+' / '+reason);}
       }
@@ -706,7 +725,8 @@
    await write('ui.click',{ref:chosen.ref,Force:background(),hold_ticks:2},token,':talk',id);
    log('관계 선택 대화 응답 요청 / '+C.clean(chosen.text));
   }
-  return {preference:preference,phone:phone,restorePhoneActor:restorePhoneActor,market:market,catShop:catShop,choiceCard:choiceCard,answerCall:answerCall,relationshipChoice:relationshipChoice,
+  function reset(){news=null;nextNews=0;orders={};choiceAt=0;phoneReturn=null;phonePanel=null;lastCall=null;}
+  return {reset:reset,preference:preference,phone:phone,restorePhoneActor:restorePhoneActor,market:market,catShop:catShop,choiceCard:choiceCard,answerCall:answerCall,relationshipChoice:relationshipChoice,
    readNews:readNews,latestNews:function(){return news;}};
  }
  root.ObserverPanels={create:create};
