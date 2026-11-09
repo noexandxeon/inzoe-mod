@@ -241,6 +241,16 @@
    decision.goal={name:plan.name,kind:plan.kind,instance:plan.instance,bag:bag,target:target,at:minute,
     sentAt:Date.now(),progress:missionProgress(progress),practice:practice||null};
   }
+  async function skillEvidence(member,skillId){
+   var component;
+   try{component=await readAt(member.entity_id,'Skill');}catch(_){}
+   var skills=component&&component.skills||{};
+   var direct=Object.values(skills).find(function(s){return s.iD===skillId;});
+   if(direct&&Number.isFinite(direct.level))return {skill:skillId,level:direct.level,experience:direct.experience};
+   var listed=await cli('skill.get_all',{entity_id:String(member.entity_id)});
+   var summary=(listed.skills||[]).find(function(s){return s.id===skillId;});
+   return summary&&Number.isFinite(summary.level)?{skill:skillId,level:summary.level}:null;
+  }
   async function reviewGoal(member,decision,snapshot,minute){
    if(!decision.goal)return;
    var goal=decision.goal;
@@ -256,14 +266,17 @@
    var progress=missionProgress(mission);
    var growth=false;
    if(goal.practice){
-    var skills=await cli('skill.get_all',{entity_id:String(member.entity_id)});
-    var skill=(skills.skills||[]).find(function(s){return s.id===goal.practice.skill;});
-    if(skill&&Number.isFinite(skill.level)&&skill.level>goal.practice.level){
+    var skill=await skillEvidence(member,goal.practice.skill);
+    var levelUp=skill&&skill.level>goal.practice.level;
+    var xpUp=skill&&skill.level===goal.practice.level&&Number.isFinite(goal.practice.experience)&&
+     Number.isFinite(skill.experience)&&skill.experience-goal.practice.experience>0.001;
+    if(levelUp||xpUp){
      growth=true;
      var memory=M.record(decision,plan,minute);
-     memory.evidence=goal.practice.skill+' Lv.'+goal.practice.level+' → '+skill.level;
-     if(goal.practice.observed!==skill.level){
-      goal.practice.observed=skill.level;
+     memory.evidence=goal.practice.skill+(levelUp?' Lv.'+goal.practice.level+' → '+skill.level:
+      ' 경험치 +'+(skill.experience-goal.practice.experience).toFixed(2));
+     if(goal.practice.observed!==memory.evidence){
+      goal.practice.observed=memory.evidence;
       log(named(member)+': 실제 기술 성장 확인 / '+memory.evidence);
      }
     }
@@ -293,7 +306,7 @@
     M.note(decision,plan,'running',snapshot.queue.queue_count>0?'행동 대기열 확인 중':'행동 시작 확인 중','실제 행동 시작 확인',minute);
     return;
    }else{
-    var reason=goal.practice&&goal.seen?'연습 종료 · 기술 레벨 변화 미확인 (경험치 확인 필요)':
+    var reason=goal.practice&&goal.seen?'연습 종료 · 기술 성장 미확인':
      goal.seen?'행동 후 조건 진행 없음':'행동 대기열 등록 또는 시작 미확인';
     // A short practice can earn XP without a level-up. Do not call it a failed action.
     if(goal.practice&&goal.seen)M.note(decision,plan,'preparing',reason,'일상 병행 후 다른 연습 대상 재검토',minute);
@@ -498,13 +511,11 @@
       if(!M.practiceAllowed(decision,plan,minute)){
        M.note(decision,plan,'waiting','오늘 준비 연습 3회 · 일상생활 우선','다음 게임 날짜에 연습 재검토',minute);continue;
       }
-      var skillData=await cli('skill.get_all',{entity_id:String(member.entity_id)});
-      var currentSkill=(skillData.skills||[]).find(function(s){return s.id===condition.conditionId1;});
-      if(!currentSkill||!Number.isFinite(currentSkill.level)){
+      skillBaseline=await skillEvidence(member,condition.conditionId1);
+      if(!skillBaseline){
        M.note(decision,plan,'unsupported','현재 기술 수치 확인 필요 / '+condition.conditionId1,'게임 기술 응답 확인',minute);continue;
       }
-      skillBaseline={skill:currentSkill.id,level:currentSkill.level};
-      M.note(decision,plan,'preparing',condition.conditionId1+' Lv.'+currentSkill.level+' · 준비 연습 탐색',
+      M.note(decision,plan,'preparing',condition.conditionId1+' Lv.'+skillBaseline.level+' · 준비 연습 탐색',
        '가능한 행동 실행 후 실제 기술 성장 확인',minute);
      }
      if(type==='AddEntityTagCount'&&condition.conditionId1==='Stay_CheckIn'){
@@ -563,7 +574,8 @@
       return true;
      }
      if(await recoverGoal(member,character,decision,snapshot,time,minute,token,plan,condition))return true;
-     if(type==='SkillLevel'&&condition.conditionId1==='Art'&&local&&
+     var needsEasel=type==='SkillLevel'&&condition.conditionId1==='Art'||condition.conditionId1==='Hope_Preference_Drawing';
+     if(needsEasel&&local&&
         !local.objects.some(function(o){return /Easel|Mural|Canvas/i.test(o.table_id||'');})&&
         (!plan.expire_ticks||plan.expire_ticks/600000000-minute>=90)&&minute>=(decision.nextGoalFurnish||0)&&
         canFurnish(member,snapshot)&&local.summary.site_type==='Residence'&&

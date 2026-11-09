@@ -1,6 +1,6 @@
 (function () {
  'use strict';
- var VERSION='0.4.4', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.4.5', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var busy=false, epoch=0, index=0, cache={}, profiles={}, rows={}, logs=[], members=[], lastReport=0;
  var status='Start를 누르면 현재 가구를 자동 관리합니다.', errors=0, lastGame=null;
  var caps={}, snapshots={}, lastCycle=0, popupRows={}, lastPopup=null, blockedPopup=null;
@@ -636,6 +636,7 @@
    var household=await cli('household.get_members');
    if(!Array.isArray(household.members))throw Error('가구 응답 형식 변경');
    var traveling=awayHousehold(household,lastGame);
+   if(state.enabled&&traveling)await travel.observeStay(state.awayTravel,time.day*1440+time.hour*60+time.minute);
    if(state.enabled&&state.scope!=='played'&&!traveling&&String(household.household_id)!==String(state.household)){status='다른 가구를 보고 있습니다. 원래 가구로 돌아가면 재개합니다.';return;}
    members=await roster(household,lastGame.map_id);
    await capability('career.join');

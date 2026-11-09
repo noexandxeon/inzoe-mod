@@ -199,11 +199,19 @@
   if(!declined&&refusalButtons.length===1)declined={button:refusalButtons[0],kind:'negative',answers:[]};
   if(context.financial){
    var payments=safe.filter(function(a){
-    return /^(?:납부하기|공과금 납부|이자 납부|Pay bill|Pay interest)$/i.test(clean(a.button.text))&&
-     !risky(a.scripts)&&
-     /(?:Pay|Repay)(?:Utility|Tax|Interest)|(?:Utility|Tax|Interest)(?:Pay|Repay)/i.test(a.scripts);
+    var title=clean(a.button.text);
+    if(a.scripts==='LoanPayment_Interest_Mortgage'&&title==='이자만 납부'){a.paymentKind='interest';return true;}
+    if(!/^(?:납부하기|공과금 납부|이자 납부|Pay bill|Pay interest)$/i.test(title))return false;
+    if(a.scripts==='Accept_Payment_Tax'||/^(?:PayTax|RepayTax|TaxPay|TaxRepay|PayUtility|RepayUtility|UtilityPay|UtilityRepay)$/i.test(a.scripts)){
+     a.paymentKind='tax';a.ledgerReason='ExpenseTax';return true;
+    }
+    if(/^(?:PayInterest|RepayInterest|InterestPay|InterestRepay)$/i.test(a.scripts)){a.paymentKind='interest';return true;}
+    return false;
    });
-   if(payments.length===1){payments[0].payment=true;return payments[0];}
+   if(payments.length===1){
+    payments[0].payment=true;
+    return payments[0];
+   }
    return declined||null;
   }
   if(context.timing){
@@ -223,18 +231,31 @@
    (options.length===1&&/^(?:확인|알겠습니다|OK|Got it)[.!]?$/i.test(clean(options[0].text))&&knownRefs.indexOf(options[0].ref)<0?
     {button:options[0],kind:'normal',answers:[]}:null);
  }
- function paymentAmount(nodes){
+ function paymentAmount(nodes,kind){
   var labels=nodes.filter(function(n){return n.role==='text';}).map(function(n){return clean(n.text);});
+  function parse(value){
+   var n=Number(value.replace(/,/g,''));
+   return Number.isSafeInteger(n)&&n>0?n:null;
+  }
+  if(kind==='interest'){
+   var interest=Array.from(labels.join(' ').matchAll(/2\.\s*이자만 납부\s*(?:→\s*)?총 납부액은\s*(\d{1,3}(?:,\d{3})+|\d+)\s*(?:미유|뮤)입니다\./g));
+   if(interest.length===1)return parse(interest[0][1]);
+   if(interest.length>1||labels.some(function(t){return t.indexOf('원금 일시상환')>=0;}))return null;
+  }
+  if(kind==='tax'){
+   var totals=Array.from(labels.join(' ').matchAll(/총 청구 금액\s*[:：]?\s*(\d{1,3}(?:,\d{3})+|\d+)\s*(?:미유|뮤)(?=\s|$)/g));
+   if(totals.length===1)return parse(totals[0][1]);
+   if(totals.length>1)return null;
+  }
   var amounts=[];
   labels.forEach(function(line,index){
-   var match=line.match(/^(?:납부 금액|청구 금액|이자 금액|Amount due)\s*[:：]?\s*(.*)$/i);
+   var match=line.match(/^(?:납부 금액|총 청구 금액|청구 금액|이자 금액|Amount due)\s*[:：]?\s*(.*)$/i);
    if(!match)return;
    var text=match[1]||labels[index+1]||'';
-   var amount=text.match(/^(?:[₥Ɯ₩§$]\s*)?(\d+|\d{1,3}(?:,\d{3})+)(?:\s*(?:미유|mew))?$/i);
-   if(amount)amounts.push(Number(amount[1].replace(/,/g,'')));
-   else amounts.push(NaN);
+   var amount=text.match(/^(?:[₥Ɯ₩§$]\s*)?(\d+|\d{1,3}(?:,\d{3})+)(?:\s*(?:미유|뮤|mew))?$/i);
+   amounts.push(amount?parse(amount[1]):null);
   });
-  return amounts.length===1&&Number.isSafeInteger(amounts[0])&&amounts[0]>0?amounts[0]:null;
+  return amounts.length===1?amounts[0]:null;
  }
  function messageKey(thread){return JSON.stringify([thread.key,thread.last.messageId,thread.last.timestamp]);}
  var api={clean:clean,widgets:widgets,usable:usable,popup:popup,cardScore:cardScore,paymentAmount:paymentAmount,messageKey:messageKey,

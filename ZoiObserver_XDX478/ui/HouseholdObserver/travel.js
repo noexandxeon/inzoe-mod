@@ -56,6 +56,17 @@
  function travelOverlay(block){
   return block.popup_count===1&&block.primary_detail==='None'&&(block.pause_reasons||[]).indexOf('CityMoveMainPopup')>=0;
  }
+ function checkInTags(character){
+  if(!character||!Array.isArray(character.entityTags))return null;
+  return character.entityTags.filter(function(tag){return tag.value==='Stay_CheckIn'&&typeof tag.expire==='string';})
+   .map(function(tag){return tag.expire;});
+ }
+ function checkInEvidence(character,trip){
+  if(!Array.isArray(trip.checkInBefore)||!character||character.locatedCityName!==trip.destination)return null;
+  var tags=checkInTags(character)||[];
+  var fresh=tags.find(function(expiry){return trip.checkInBefore.indexOf(expiry)<0;});
+  return fresh?{tag:'Stay_CheckIn',expiry:fresh,site:character.locatedSiteId&&character.locatedSiteId.value}:null;
+ }
  function roomOptions(tree,party,nights,limit){
   if(!(party>=1&&party<=8&&nights===1&&limit>0))return [];
   return entries(tree,'/BW_HotelList').map(function(n){
@@ -104,8 +115,8 @@
  }
  function create(api,L,P){
   var cli=api.cli,write=api.write,state=api.state;
-  async function tree(name){
-   try{return await cli('ui.get_tree',{Window:name,max_nodes:620});}
+  async function tree(name,hitTest){
+   try{return await cli('ui.get_tree',{Window:name,max_nodes:620,verify_hit:!!hitTest});}
    catch(e){if(/not found|not open|찾을 수 없|no widget|no window/i.test(e.message))return {};throw e;}
   }
   function describe(trip,note){
@@ -134,6 +145,18 @@
   async function funds(trip){
    return L.dayBudget(await cli('entity.reflect',{entity_id:trip.household,Component:'Currency'}),trip.familySize);
   }
+  async function observeStay(trip,minute){
+   if(!trip||trip.checkIn==='confirmed'||minute<(trip.nextCheckIn||0))return;
+   trip.nextCheckIn=minute+20;
+   var character;
+   try{character=await cli('entity.reflect',{entity_id:trip.arrivedActor});}catch(_){return;}
+   var evidence=checkInEvidence(character,trip);
+   if(evidence){
+    trip.checkIn='confirmed';trip.checkInEvidence=evidence;
+    describe(trip,'도시 도착 및 실제 숙소 체크인 확인');
+    api.log('숙소 체크인 확인 · '+trip.room);
+   }
+  }
   async function start(member,decision,snapshot,time,token){
    var game=api.game(), actor=String(member.entity_id), household=String(member.household_id);
    if(state.background||state.travel||state.awayTravel||actor!==String(game.possessed_entity_id)||!cities[game.map_id])return false;
@@ -151,8 +174,13 @@
     decision.vacationNote='생활비 확보 후 도시 여행';return false;
    }
    var open=await cli('ui.list_windows');
-   if((open.windows||[]).some(function(w){return /Smartphone|Travel|Relationship|MobileCall/i.test(w.ui_type);})||
-      game.blocking&&game.blocking.blocked)return false;
+   var block=game.blocking||{};
+   var safeHud=Array.isArray(open.windows)&&open.windows.every(function(w){
+    return /^(?:Hud|Tooltip|SpeechBubble|InteractionMarkerCanvas|WaypointIndicator|CommonCatAlert|MsgBox|CursorActorInfo|HopeOverHeadAlert)$/.test(w.ui_type)||
+     w.ui_type==='RelationshipEffect'&&w.counts&&w.counts.interactive===0;
+   });
+   if(!safeHud||block.loading||block.coach_mark||block.cat_talk||block.level_sequence||block.popup_count||
+      block.blocked&&block.primary_kind!=='modal_ui')return false;
    var other=family.members.filter(function(m){return String(m.entity_id)!==actor;});
    for(var i=0;i<other.length;i++){
     var person=other[i], info=await cli('entity.reflect',{entity_id:String(person.entity_id)});
@@ -163,7 +191,7 @@
    var rotation=trip.eligible.length?(decision.vacation.trips.length+trip.day)%trip.eligible.length:0;
    trip.eligible=trip.eligible.slice(rotation).concat(trip.eligible.slice(0,rotation)).slice(0,count);
    trip.previous=state.lastTravelCity&&state.lastTravelCity[household];
-   var phone=button(await tree('Hud'),'/WBP_PlayerInfo/BW_Button_SmartPhone');
+   var phone=button(await tree('Hud',block.blocked),'/WBP_PlayerInfo/BW_Button_SmartPhone');
    if(!phone)return false;
    await click(phone.ref,trip,token,true);
    state.travel=trip;
@@ -184,10 +212,13 @@
       p.vacation.trips.push({day:trip.day,city:trip.destination,room:trip.room,party:trip.party});
      state.lastTravelCity=state.lastTravelCity||{};
      state.lastTravelCity[trip.household]=trip.destination;
-     var wallet;
-     try{wallet=L.dayBudget(await cli('entity.reflect',{entity_id:String(family.household_id),Component:'Currency'}),family.members.length);}
+     var wallet, balance, debit;
+     try{
+      wallet=await cli('entity.reflect',{entity_id:String(family.household_id),Component:'Currency'});
+      balance=wallet.currencyMap&&wallet.currencyMap.mew;
+      debit=L.matchingDebit(wallet,trip.ledgerBefore,member.entity_id,trip.price,'ExpenseBuy');
+     }
      catch(_){}
-     var balance=wallet&&wallet.cash;
      var paid=Number.isFinite(trip.balanceBefore)&&Number.isFinite(balance)&&trip.balanceBefore-balance===trip.price;
      var joined=[];
      for(var j=0;j<(trip.companions||[]).length;j++){
@@ -205,9 +236,11 @@
      }
      state.awayTravel={household:trip.household,awayHousehold:String(family.household_id),actor:trip.actor,
       actorName:trip.actorName,origin:trip.origin,destination:trip.destination,room:trip.room,price:trip.price,
-      balanceBefore:trip.balanceBefore,balanceAfter:balance,paymentEvidence:paid?'matching-balance-change':'unconfirmed',
-      companions:joined,checkIn:'unconfirmed'};
-     describe(trip,'도시 도착 확인 · '+(paid?'예약액과 잔액 차이 일치':'결제 확인 대기')+' · 체크인 확인 필요');
+      arrivedActor:String(member.entity_id),balanceBefore:trip.balanceBefore,balanceAfter:balance,
+      paymentEvidence:debit&&paid?'matching-ledger-and-balance':paid?'matching-balance-change':'unconfirmed',
+      ledgerEntry:debit||null,companions:joined,checkInBefore:trip.checkInBefore,checkIn:'unconfirmed'};
+     describe(trip,'도시 도착 확인 · '+(debit&&paid?'예약액과 거래 원장 일치':paid?'예약액과 잔액 차이 일치':'결제 확인 대기')+' · 체크인 확인 필요');
+     await observeStay(state.awayTravel,time.day*1440+time.hour*60+time.minute);
      api.log('도시 여행 도착 확인 · '+trip.room+' · '+trip.party+'명');
      state.travel=null;return false;
     }
@@ -372,7 +405,15 @@
      await click(review.pending.ref,trip,token,false);
      describe(trip,'출발 안내 확인 중');return true;
     }
-    trip.balanceBefore=bookingFunds.cash;
+    var originalWallet=await cli('entity.reflect',{entity_id:trip.household,Component:'Currency'});
+    var originalCharacter=await cli('entity.reflect',{entity_id:trip.actor});
+    var finalBudget=L.dayBudget(originalWallet,trip.familySize);
+    if(!finalBudget||finalBudget.free<trip.price)return true;
+    var latestReview=bookingReview(await tree(travel.window),trip);
+    if(!latestReview||!latestReview.confirm||latestReview.confirm.ref!==review.confirm.ref)return true;
+    trip.balanceBefore=finalBudget.cash;
+    trip.ledgerBefore=L.ledgerCheckpoint(originalWallet);
+    trip.checkInBefore=checkInTags(originalCharacter);
     trip.stage='submitted';trip.submitted=Date.now();
     await click(review.confirm.ref,trip,token,false);
     describe(trip,'숙소 예약 요청 · 도시 이동 확인 대기');
@@ -380,10 +421,10 @@
    }
    return true;
   }
-  return {start:start,advance:advance};
+  return {start:start,advance:advance,observeStay:observeStay};
  }
  var api={create:create,currentCity:currentCity,roomOptions:roomOptions,offTomorrow:offTomorrow,companionCount:companionCount,
-  bookingReview:bookingReview,travelOverlay:travelOverlay,entryPoint:entryPoint};
+  bookingReview:bookingReview,travelOverlay:travelOverlay,entryPoint:entryPoint,checkInEvidence:checkInEvidence};
  if(typeof module!=='undefined'&&module.exports)module.exports=api;
  else root.ObserverTravel=api;
 })(this);

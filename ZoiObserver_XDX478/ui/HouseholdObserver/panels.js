@@ -263,6 +263,51 @@
    decision.phone={unread:threads.reduce(function(n,t){return n+t.unread;},0),items:threads.filter(function(t){return t.unread>0;})
     .slice(0,10).map(function(t){return {id:t.last.messageId,kind:t.needsReply?'답장 필요':t.system?'시스템':'일반'};})};
   }
+  function messageHistory(data,item){
+   var group=item.system?data.messageListBySystem:data.messageList;
+   return (group&&group.mobileMessageListMap&&group.mobileMessageListMap[item.thread]||{}).mobileMessageList||[];
+  }
+  function responseEvidence(history,item){
+   var index=history.findIndex(function(m){return !m.bIsSend&&m.timestamp===item.timestamp&&m.messageId===item.messageId;});
+   if(index<0)return null;
+   var following=history.slice(index+1).find(function(m){return m.bIsSend||!m.bIsIgnored&&m.bNeedResponse;});
+   if(following&&following.bIsSend)return 'outgoing';
+   return history[index].bNeedResponse===false?'response-confirmed':null;
+  }
+  async function reconcileReplies(member,decision,data,minute){
+   var replies=decision.replyRequests||{}, payments=decision.payments||{};
+   var wallet, checkedWallet=false;
+   for(var key of Object.keys(replies)){
+    var item=replies[key], payment=payments[key];
+    if(item.phase==='requested'){
+     var evidence=responseEvidence(messageHistory(data,item),item);
+     if(evidence){
+      item.phase=evidence;item.confirmedAt=minute;
+      if(decision.replyPending)delete decision.replyPending[item.thread];
+      log(member.first_name+': '+item.sender+(evidence==='outgoing'?' 답장 발송 확인 / ':' 응답 상태 반영 / ')+item.choice);
+     }
+    }
+    if(payment&&!payment.ledgerEntry&&minute>=(payment.nextCheck||0)){
+     payment.nextCheck=minute+30;
+     if(!checkedWallet){
+      try{wallet=await reflect(member.household_id,'Currency');}catch(_){}
+      checkedWallet=true;
+     }
+     if(wallet){
+      payment.balanceAfter=wallet.currencyMap&&wallet.currencyMap.mew;
+      payment.matchingBalanceChange=Number.isFinite(payment.balanceAfter)&&payment.balanceBefore-payment.balanceAfter===payment.amount;
+      payment.ledgerEntry=L.matchingDebit(wallet,payment.checkpoint,member.entity_id,payment.amount,payment.ledgerReason);
+      if(payment.ledgerEntry)log(member.first_name+': 납부 거래 원장 일치 / '+payment.amount+'미유');
+     }
+     payment.responseConfirmed=item.phase!=='requested';
+     payment.phase=payment.ledgerEntry?'ledger-matched':payment.responseConfirmed?'response-confirmed':'unconfirmed';
+    }
+   }
+   // Keep unresolved requests and the newest confirmed ordinary replies.
+   Object.keys(replies).filter(function(key){return !payments[key]&&replies[key].phase!=='requested';})
+    .sort(function(a,b){return replies[b].confirmedAt-replies[a].confirmedAt;}).slice(32)
+    .forEach(function(key){delete replies[key];});
+  }
   async function sender(thread){
    if(thread.system){
     var parts=thread.key.split(';'), definitions=(await row('MobileMessageSystem',parts[0])).systems||[];
@@ -345,12 +390,17 @@
    if(minute<(canReply?decision.nextPhoneAction||0:decision.nextPhone||0))return;
    decision.nextPhone=minute+60;
    decision.nextPhoneAction=minute+10;
-   var threads=mail(await reflect(id,'MobileMessage'));
+   var mobile=await reflect(id,'MobileMessage');
+   await reconcileReplies(member,decision,mobile,minute);
+   var threads=mail(mobile);
    updatePhone(decision,threads);
    if(!canReply)return;
    if(!threads.length){decision.nextPhoneAction=minute+20;return;}
    var attempts=decision.phoneAttempts||(decision.phoneAttempts={});
-   threads=threads.filter(function(t){return !(attempts[t.key]&&attempts[t.key].stamp===t.last.timestamp&&attempts[t.key].until>minute);});
+   threads=threads.filter(function(t){
+    return (t.unread||!(decision.replyRequests&&decision.replyRequests[C.messageKey(t)]))&&
+     !(attempts[t.key]&&attempts[t.key].stamp===t.last.timestamp&&attempts[t.key].until>minute);
+   });
    if(!threads.length||!await freeHud())return;
    var opened=false, phoneTree, switched=false;
    try{
@@ -402,8 +452,9 @@
       if((!dtId||dtId==='None')&&item.custom&&item.custom.dtId!=='None')dtId=item.custom.dtId;
       var reply=item.needsReply&&dtId&&dtId!=='None'?await row('CustomMobileMessage',dtId):{};
       var choices=thread.filter(function(n){return C.usable(n)&&/\/WBP_Mobile_Message_Popup\/BW_Choice_Slot\d+\/Button$/.test(n.ref);});
-      var best=null, timing=null, sent=false;
-      if(item.needsReply&&choices.length){
+      var best=null, timing=null, sent=false, key=C.messageKey(item);
+      var replyRequests=decision.replyRequests||(decision.replyRequests={});
+      if(item.needsReply&&choices.length&&!replyRequests[key]&&message.timestamp&&message.messageId){
        var currentTime=await cli('environment.get_time'), now=currentTime.day*1440+currentTime.hour*60+currentTime.minute;
        if(!Number.isFinite(now))now=minute;
        var info=[dtId,message.messageId,message.messageText].join(' ');
@@ -421,53 +472,43 @@
         spam:/Spam|Marketing|Advertising/i.test(info)});
       }
       if(best&&best.payment){
-       var wallet=await reflect(member.household_id,'Currency'), amount=C.paymentAmount(thread);
+       var wallet=await reflect(member.household_id,'Currency'), amount=C.paymentAmount(thread,best.paymentKind);
        var balance=wallet.currencyMap&&wallet.currencyMap.mew;
-       var payments=decision.payments||(decision.payments={}), paymentKey=C.messageKey(item);
-       if(payments[paymentKey]||!message.timestamp||!message.messageId||!(amount>0)||!Number.isFinite(balance)||balance<amount)best=null;
+       var payments=decision.payments||(decision.payments={});
+       var prior=Object.values(payments).some(function(p){
+        return p.kind===best.paymentKind&&p.amount===amount&&
+         (!p.responseConfirmed&&!p.ledgerEntry||Math.floor(p.minute/1440)===Math.floor(minute/1440));
+       });
+       if(payments[key]||prior||!(amount>0)||!Number.isFinite(balance)||balance<amount)best=null;
        else{
-        payments[paymentKey]={thread:item.key,messageId:message.messageId,timestamp:message.timestamp,
-         amount:amount,balanceBefore:balance,phase:'requested',minute:minute};
+        payments[key]={thread:item.key,messageId:message.messageId,timestamp:message.timestamp,
+         amount:amount,kind:best.paymentKind,balanceBefore:balance,checkpoint:L.ledgerCheckpoint(wallet),ledgerReason:best.ledgerReason,
+         phase:'requested',minute:minute};
        }
       }
       if(best){
+       replyRequests[key]={thread:item.key,system:item.system,messageId:message.messageId,timestamp:message.timestamp,
+        phase:'requested',sender:name,choice:C.clean(best.button.text)};
        sent=await click(best.button,token,id);
        if(sent)await wait(350);
+       else{
+        delete replyRequests[key];
+        if(best.payment)delete decision.payments[key];
+       }
       }
       var refreshed=await reflect(id,'MobileMessage');
       var remaining=mail(refreshed), after=remaining.find(function(t){return t.key===item.key;});
-      var group=item.system?refreshed.messageListBySystem:refreshed.messageList;
-      var history=(group&&group.mobileMessageListMap&&group.mobileMessageListMap[item.key]||{}).mobileMessageList||[];
+      await reconcileReplies(member,decision,refreshed,minute);
       updatePhone(decision,remaining);
       var read=item.unread-(after&&after.unread||0);
       if(read>0){processed=true;log(member.first_name+': '+name+' 메시지 '+read+'건 읽음 확인');}
-      var previous=item.history.filter(function(m){return m.bIsSend;}).pop();
-      var outgoing=history.filter(function(m){return m.bIsSend;}).pop();
-      if(sent&&best&&best.payment){
-       var payment=decision.payments[C.messageKey(item)];
-       var paidWallet=await reflect(member.household_id,'Currency');
-       payment.balanceAfter=paidWallet.currencyMap&&paidWallet.currencyMap.mew;
-       payment.matchingBalanceChange=Number.isFinite(payment.balanceAfter)&&payment.balanceBefore-payment.balanceAfter===payment.amount;
-       payment.responseConfirmed=history.some(function(m){
-        return m.timestamp===message.timestamp&&m.messageId===message.messageId&&m.bNeedResponse===false;
-       });
-       payment.phase=payment.responseConfirmed?'response-confirmed':'unconfirmed';
-       log(member.first_name+': 납부 응답 '+(payment.responseConfirmed?'반영 확인':'결과 확인 대기')+
-        (payment.matchingBalanceChange?' · 청구액과 잔액 차이 일치':' · 결제 내역 확인 필요'));
-      }
-      if(sent&&outgoing&&(!previous||outgoing.timestamp!==previous.timestamp||outgoing.messageId!==previous.messageId)){
-       if(decision.replyPending)delete decision.replyPending[item.key];
-       processed=true;log(member.first_name+': '+name+' 답장 발송 확인 / '+C.clean(best.button.text));
-      }else if(sent&&history.some(function(m){
-       return m.timestamp===message.timestamp&&m.messageId===message.messageId&&m.bNeedResponse===false;
-      })){
-       if(decision.replyPending)delete decision.replyPending[item.key];
-       processed=true;log(member.first_name+': '+name+' 응답 상태 반영 / '+C.clean(best.button.text));
+      if(sent&&replyRequests[key]&&replyRequests[key].phase!=='requested'){
+       processed=true;
       }else if(item.needsReply){
        var pending=decision.replyPending||(decision.replyPending={});
-       var priorPayment=decision.payments&&decision.payments[C.messageKey(item)];
+       var priorPayment=decision.payments&&decision.payments[key];
        var reason=priorPayment?'납부 요청 결과 확인 대기 · 중복 요청 보류':
-        sent?'발송 기록 확인 대기':choices.length?'선택 가능한 답장 확인 대기':'답장 버튼이 아직 없음';
+        replyRequests[key]?'발송 기록 확인 대기 · 중복 응답 보류':choices.length?'선택 가능한 답장 확인 대기':'답장 버튼이 아직 없음';
        attempts[item.key].until=minute+20;
        if(pending[item.key]!==reason){pending[item.key]=reason;log(member.first_name+': '+name+' / '+reason);}
       }

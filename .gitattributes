@@ -1,0 +1,5 @@
+# Keep checkout bytes identical to the release archive on every platform.
+* -text
+ZoiObserver_XDX478/ui/HouseholdObserver/index.html whitespace=cr-at-eol
+ZoiObserver_XDX478/ui/HouseholdObserver/window.js whitespace=cr-at-eol
+*.zip binary

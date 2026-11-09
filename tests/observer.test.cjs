@@ -59,13 +59,14 @@ test('disappearing hopes are not reported as completed; finished history is boun
 
 function lifeHarness() {
  const decision={}, writes=[], logs=[];
- let level=1, finished=false;
+ let level=1, experience, finished=false;
  const member={entity_id:1,household_id:10,first_name:'진',age_group:'Adult'};
  const character={locatedSiteId:{value:30},worldTransform:{translation:{x:0,y:0,z:0}}};
  const snapshot={queue:{queue_count:0},stats:{stats:{}},work:{},hope:{selected:[{hope_id:'HandCraftGoal'}]}};
  const cli=async(name,args) => {
   if(name==='skill.get_all') return {skills:[{id:'HandCraft',level}]};
   if(name==='entity.reflect') {
+   if(args.Component==='Skill'&&experience!==undefined)return {skills:{handCraft:{iD:'HandCraft',level,experience}}};
    if(args.Component==='Hope') return {selectedHopes:[{hopeId:'HandCraftGoal',missionId:{value:100}}]};
    if(args.Component==='Mission') return {missionMap:{'(Value=100)':{bIsFinished:finished,conditionStates:[{currentCount:level,goalCount:3,compareType:'GreaterOrEqual'}]}}};
   }
@@ -80,7 +81,7 @@ function lifeHarness() {
  const context=load('life-actions.js');
  const actions=context.ObserverLifeActions.create({cli,write:async(...args)=>writes.push(args),log:s=>logs.push(s),state:{},
   game:()=>({map_id:'Cahaya_Map',possessed_entity_id:1}),active:()=>true});
- return {decision,member,character,snapshot,writes,logs,actions,level:n=>level=n,finish:()=>finished=true};
+ return {decision,member,character,snapshot,writes,logs,actions,level:n=>level=n,xp:n=>experience=n,finish:()=>finished=true};
 }
 test('a skill hope trains through available actions, measures growth, then checks original completion',async() => {
  const h=lifeHarness(), time={day:0,hour:10};
@@ -120,6 +121,27 @@ test('a queued game action prevents new hope training requests',async() => {
  assert.equal(await h.actions.pursueHope(h.member,h.character,h.decision,h.snapshot,{day:0,hour:10},600,1),false);
  assert.equal(h.writes.length,0);
 });
+test('a real experience change at the same level is evidence without marking the hope complete',async()=>{
+ const h=lifeHarness();
+ h.xp(82.78);
+ await h.actions.pursueHope(h.member,h.character,h.decision,h.snapshot,{day:0,hour:10},600,1);
+ h.snapshot.queue.current={interaction_bag_id:'Craft_Practice_HandCraft',target_entity_id:20};
+ h.xp(93.28);
+ await h.actions.reviewGoal(h.member,h.decision,h.snapshot,620);
+ assert.equal(h.decision.goalPlans[0].memory.evidence,'HandCraft 경험치 +10.50');
+ assert.equal(h.decision.goalPlans[0].memory.phase,'preparing');
+});
+test('a prior same-price debit or an unrelated purchase cannot verify a payment',()=>{
+ const record=(amount,transactionReason='ExpenseTax',actor=1)=>({amount,transactionReason,participantId:{value:actor}});
+ const wallet=records=>({currencyHistoryMap:{mew:{dailyTransactionMap:{'0003.11.01-00.00.00':{records}}}}});
+ const before=[record(-70)], checkpoint=L.ledgerCheckpoint(wallet(before));
+ assert.equal(L.matchingDebit(wallet(before),checkpoint,1,70,'ExpenseTax'),null);
+ assert.equal(L.matchingDebit(wallet([...before,record(-70,'ExpenseBuy')]),checkpoint,1,70,'ExpenseTax'),null);
+ assert.equal(L.matchingDebit(wallet([...before,record(-70,'ExpenseTax',2)]),checkpoint,1,70,'ExpenseTax'),null);
+ assert.deepEqual(L.matchingDebit(wallet([...before,record(-70)]),checkpoint,1,70,'ExpenseTax'),
+  {day:'0003.11.01-00.00.00',amount:-70,reason:'ExpenseTax'});
+ assert.equal(L.matchingDebit(wallet([...before,record(-70),record(-70)]),checkpoint,1,70,'ExpenseTax'),null);
+});
 
 const text=s=>({role:'text',text:s});
 test('payment amounts accept inline or separate values, reject dates, ambiguity and malformed amounts',() => {
@@ -137,19 +159,68 @@ test('a payment label cannot hide a new-loan action or two ambiguous payment opt
  const b={kind:'normal',keys:['b'],scripts:['PayInterest']};
  assert.equal(C.responseButton([...options,{ref:'b',text:'이자 납부'}],{...words,b:'이자 납부'},[{...action,scripts:['PayUtility']},b],{financial:true}),null);
 });
+test('native tax and mortgage templates select only the identified total or interest',()=>{
+ const pay={ref:'pay',text:'납부하기'}, principal={ref:'principal',text:'원금 일시상환 (당회 이자 포함)'};
+ const interest={ref:'interest',text:'이자만 납부'};
+ const words={pay:pay.text,principal:principal.text,interest:interest.text};
+ const tax=C.responseButton([pay],words,[{kind:'positive',keys:['pay'],scripts:['Accept_Payment_Tax']}],{financial:true});
+ assert.equal(tax.ledgerReason,'ExpenseTax');
+ assert.equal(C.paymentAmount([text('청구 내역 총 청구 금액 : 518 뮤 재산세 : 300 뮤 전기세 : 150 뮤')],tax.paymentKind),518);
+ const paid=C.responseButton([principal,interest],words,[
+  {kind:'positive',keys:['principal'],scripts:['LoanPayment_All_Mortgage']},
+  {kind:'normal',keys:['interest'],scripts:['LoanPayment_Interest_Mortgage']}],{financial:true});
+ assert.equal(paid.button,interest);
+ assert.equal(C.paymentAmount([text('1. 원금 일시상환 (당회 이자 포함) → 총 납부액은 1,400뮤입니다.'),
+  text('2. 이자만 납부'),text('→ 총 납부액은 70뮤입니다.')],paid.paymentKind),70);
+ assert.equal(C.paymentAmount([text('1. 원금 일시상환 (당회 이자 포함) → 총 납부액은 1,400뮤입니다.')],paid.paymentKind),null);
+});
+test('destination arrival is distinct from a fresh native check-in tag',()=>{
+ const tag={value:'Stay_CheckIn',expire:'0003.11.01-22.09.09'};
+ const trip={destination:'Gangnam_Map',checkInBefore:['old']};
+ const character={locatedCityName:'Gangnam_Map',locatedSiteId:{value:53549},entityTags:[tag]};
+ assert.equal(T.checkInEvidence({...character,locatedCityName:'Cahaya_Map'},trip),null);
+ assert.equal(T.checkInEvidence(character,{...trip,checkInBefore:[tag.expire]}),null);
+ assert.equal(T.checkInEvidence(character,{...trip,checkInBefore:null}),null);
+ assert.deepEqual(T.checkInEvidence(character,trip),{tag:tag.value,expiry:tag.expire,site:53549});
+});
+test('the six native travel notices gate the single departure button',()=>{
+ const path='Travel/BW_WBP_Confirm/BW_DynamicEntryBox_CheckBox';
+ const notices=[
+  '여행에 함께 오지 않은 가족은 조작할 수 없습니다.',
+  '가족 구성원이 아닌 조이와는 그룹 기능을 이용해 함께 다닐 수 있습니다.',
+  '진행 중이거나, 예정된 이벤트는 즉시 취소됩니다.',
+  '미션은 유지되지만 조건에 따라 달성이 불가할 수 있습니다.',
+  '여행 기간 동안 직장은 무급 휴가로, 학교는 인정 결석으로 처리됩니다.',
+  '다른 도시에서는 기존 도시에 있는 가족의 정보가 즉시 갱신되지 않을 수 있음을 확인했습니다.'
+ ];
+ const trip={destination:'Gangnam_Map',room:'102호 도미토리',party:1,roomParty:1,price:70};
+ const toggles=notices.map((label,i)=>({role:'toggle',text:label,ref:path+'/row'+i+'/BW_CheckBox',state:['off']}));
+ const ready={role:'button',text:'여행 떠나기',ref:'Travel/BW_WBP_Button_Ready'};
+ const button={...ready,ref:ready.ref+'/BW_Button'};
+ const review={nodes:[...['내 여행 정보','여행 도시','도원','숙소',trip.room,'여행 기간','1박','여행 인원','총 여행 비용','70'].map(text),
+  ...toggles,ready,button]};
+ assert.equal(T.bookingReview(review,trip).pending,toggles[0]);
+ assert.equal(T.bookingReview(review,trip).confirm,false);
+ toggles.forEach(t=>t.state=['on']);
+ assert.equal(T.bookingReview(review,trip).confirm,button);
+ assert.equal(T.bookingReview(review,{...trip,price:71}),null);
+ toggles[0].text='다른 안내';
+ assert.equal(T.bookingReview(review,trip),null);
+});
 
-function phoneHarness() {
+function phoneHarness(isPayment=true) {
  let screen='hud',sent=0;
  const decision={}, logs=[];
- const message={messageId:'UtilityBill',timestamp:'2026.11.09-10.00.00',bIsRead:true,bNeedResponse:true,customResponse:{dtId:'Bill'}};
- const mobile=()=>({messageList:{mobileMessageListMap:{'(Value=2)':{mobileMessageList:[message]}}}});
+ let history=[{messageId:isPayment?'UtilityBill':'Greeting',timestamp:'2026.11.09-10.00.00',bIsRead:true,bNeedResponse:true,
+  customResponse:{dtId:isPayment?'Bill':'Greeting'}}];
+ const mobile=()=>({messageList:{mobileMessageListMap:{'(Value=2)':{mobileMessageList:history}}}});
  const button=(ref,t)=>({role:'button',ref,text:t,state:'enabled'});
  const cli=async(name,args) => {
   if(name==='entity.reflect'&&args.Component==='MobileMessage') return mobile();
   if(name==='entity.reflect'&&args.Component==='Currency') return {currencyMap:{mew:3000}};
   if(name==='entity.get_character_info') return {display_name:'고지서'};
-  if(name==='data.table_get') return {positiveAnswerButtonStrId:'pay',positiveAnswerScriptIds:['PayUtility'],messageData:{}};
-  if(name==='l10n.get') return {pay:'납부하기'};
+  if(name==='data.table_get') return {positiveAnswerButtonStrId:'pay',positiveAnswerScriptIds:isPayment?['PayUtility']:[],messageData:{}};
+  if(name==='l10n.get') return {pay:isPayment?'납부하기':'확인'};
   if(name==='environment.get_time') return {day:0,hour:10,minute:0};
   if(name==='game.get_state') return {possessed_entity_id:1,blocking:{}};
   if(name==='ui.list_windows') return {windows:[{ui_type:'Hud'}],blocking:{}};
@@ -157,7 +228,7 @@ function phoneHarness() {
    if(args.Window==='Hud') return {nodes:[button('/WBP_PlayerInfo/BW_Button_SmartPhone','phone')]};
    if(screen==='hud') return {};
    const list={role:'list',ref:'/WBP_Mobile_Message/TileView_list',children:[{role:'entry',text:'고지서',children:[button('/thread/BW_Button','고지서')]}]};
-   const detail=[text('고지서'),text('청구 금액'),text('70미유'),button('/WBP_Mobile_Message_Popup/BW_Choice_Slot1/Button','납부하기')];
+   const detail=[text('고지서'),text('청구 금액'),text('70미유'),button('/WBP_Mobile_Message_Popup/BW_Choice_Slot1/Button',isPayment?'납부하기':'확인')];
    return {window:'Phone',nodes:screen==='thread'?detail.concat(button('/WBP_Mobile_Message_Popup/BW_Button_Close','close')):
     [list,button('/WBP_Mobile_AppIcon_Message/BW_Button','messages'),button('/WBP_Common_CloseButton/BW_Button','close')]};
   }
@@ -175,8 +246,22 @@ function phoneHarness() {
   game:()=>({possessed_entity_id:1}),background:()=>true,active:()=>true});
  const member={entity_id:1,household_id:10,first_name:'진'};
  const snapshot={queue:{queue_count:0},work:{},stats:{stats:{}}};
- return {decision,logs,actions,member,snapshot,count:()=>sent};
+ return {decision,logs,actions,member,snapshot,count:()=>sent,deliver:()=>history=history.concat({
+  bIsSend:true,messageId:'Outgoing',timestamp:'2026.11.09-10.01.00'})};
 }
+test('an ordinary reply requested before a save is reconciled later without a second send',async()=>{
+ const h=phoneHarness(false);
+ await h.actions.phone(h.member,h.decision,h.snapshot,600,1);
+ assert.equal(h.count(),1);
+ const saved=JSON.parse(JSON.stringify(h.decision));
+ await h.actions.phone(h.member,saved,h.snapshot,650,1);
+ assert.equal(h.count(),1);
+ h.deliver();
+ await h.actions.phone(h.member,saved,h.snapshot,700,1);
+ assert.equal(h.count(),1);
+ assert.equal(Object.values(saved.replyRequests)[0].phase,'outgoing');
+ assert.equal(saved.pendingReplies,0);
+});
 test('an ambiguous payment result never clicks again, including after saved decision restoration',async() => {
  const h=phoneHarness();
  await h.actions.phone(h.member,h.decision,h.snapshot,600,1);

@@ -95,6 +95,38 @@
   var reserve=Math.max(1600+400*count,Math.ceil(spending/Math.max(1,dates.length))*3);
   return {cash:cash,reserve:reserve,free:Math.max(0,cash-reserve),short:cash<reserve,records:records};
  }
+ function ledgerDays(wallet){
+  var receipts=wallet&&wallet.currencyHistoryMap&&wallet.currencyHistoryMap.mew;
+  return receipts&&receipts.dailyTransactionMap;
+ }
+ function ledgerRecordKey(r){
+  return r&&JSON.stringify([r.transactionReason,r.amount,r.participantId&&r.participantId.value]);
+ }
+ function ledgerCheckpoint(wallet){
+  var days=ledgerDays(wallet);
+  if(!days)return null;
+  var checkpoint={};
+  Object.keys(days).sort().slice(-4).forEach(function(day){
+   var records=days[day].records||[];
+   checkpoint[day]={count:records.length,last:ledgerRecordKey(records[records.length-1])};
+  });
+  return checkpoint;
+ }
+ function matchingDebit(wallet,checkpoint,actor,amount,reason){
+  var days=ledgerDays(wallet);
+  if(!days||!checkpoint||!reason)return null;
+  var latest=Object.keys(checkpoint).sort().pop(), matches=[];
+  Object.keys(days).sort().forEach(function(day){
+   var records=days[day].records||[], before=checkpoint[day];
+   if(before&&(records.length<before.count||before.count&&ledgerRecordKey(records[before.count-1])!==before.last))return;
+   if(!before&&latest&&day<=latest)return;
+   records.slice(before?before.count:0).forEach(function(r){
+    if(r.amount===-amount&&r.transactionReason===reason&&String(r.participantId&&r.participantId.value)===String(actor))
+     matches.push({day:day,amount:r.amount,reason:reason});
+   });
+  });
+  return matches.length===1?matches[0]:null;
+ }
  function entrepreneur(traits,skills){
   function level(key){var s=skills.find(function(x){return x.id===key;});return s?s.level:0;}
   var initiative=traits.filter(function(t){return /^(Independent|Leader|Achiever|Adventurer|Workaholic)$/.test(t);}).length;
@@ -175,7 +207,8 @@
 
  var api={adultAge:adultAge,urgentNeed:urgentNeed,relaxed:relaxed,fixtureMatches:fixtureMatches,needChoice:needChoice,goalVenueTags:goalVenueTags,
   relationshipEntry:relationshipEntry,relationshipStage:relationshipStage,hasOtherPartner:hasOtherPartner,
-  romanceChoice:romanceChoice,dayBudget:dayBudget,entrepreneur:entrepreneur,sideJobs:sideJobs,housingChoice:housingChoice,
+  romanceChoice:romanceChoice,dayBudget:dayBudget,ledgerCheckpoint:ledgerCheckpoint,matchingDebit:matchingDebit,
+  entrepreneur:entrepreneur,sideJobs:sideJobs,housingChoice:housingChoice,
   leisureSite:leisureSite,noticeAllowed:noticeAllowed,hopeDeadline:hopeDeadline,expiringFirst:expiringFirst,
   sleeping:sleeping,vacationPlan:vacationPlan};
  if(typeof module!=='undefined'&&module.exports)module.exports=api;

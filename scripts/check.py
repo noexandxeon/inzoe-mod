@@ -26,11 +26,11 @@ def main():
     print('JavaScript syntax: PASS')
     for file in list(MOD.rglob('*.json')) + list(MOD.rglob('*.uplugin')):
         json.loads(file.read_text(encoding='utf-8-sig'))
-    manifest = json.loads((MOD / 'mod_manifest.json').read_text())
+    manifest = json.loads((MOD / 'mod_manifest.json').read_text(encoding='utf-8'))
     for name in manifest['NonAssets']:
         assert (MOD / name.lstrip('/')).is_file(), name
     parser = Scripts()
-    parser.feed((UI / 'index.html').read_text())
+    parser.feed((UI / 'index.html').read_text(encoding='utf-8'))
     assert parser.sources[:3] == ['coui://inzoi/cohtml.js', 'coui://inzoi/mod/inzoi-sdk.js', 'window.js']
     assert parser.sources[-1] == 'app.js'
     local = [name for name in parser.sources if '://' not in name]
@@ -39,11 +39,11 @@ def main():
         assert (UI / name).is_file(), name
         assert f'/ui/HouseholdObserver/{name}' in manifest['NonAssets'], name
     assert parser.sources.index('goal-memory.js') < parser.sources.index('life-actions.js')
-    version = json.loads((MOD / 'ZoiObserver_XDX478.uplugin').read_text())['VersionName']
-    assert f"VERSION='{version}'" in (UI / 'app.js').read_text()
-    assert f'Zoi Observer {version}' in (UI / 'index.html').read_text()
+    version = json.loads((MOD / 'ZoiObserver_XDX478.uplugin').read_text(encoding='utf-8'))['VersionName']
+    assert f"VERSION='{version}'" in (UI / 'app.js').read_text(encoding='utf-8')
+    assert f'Zoi Observer {version}' in (UI / 'index.html').read_text(encoding='utf-8')
     assert f'Zoi Observer {version}' == manifest['FriendlyName']
-    assert f'Zoi Observer {version}' in (ROOT / '사용설명서.md').read_text()
+    assert f'Zoi Observer {version}' in (ROOT / '사용설명서.md').read_text(encoding='utf-8')
     print('JSON, manifest, script order and version references: PASS')
     expected = {p.relative_to(ROOT).as_posix(): p.read_bytes()
                 for p in MOD.rglob('*') if p.is_file() and 'saved' not in p.parts and p.suffix != '.cfg'}
