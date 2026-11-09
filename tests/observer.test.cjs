@@ -9,8 +9,11 @@ const L = require(path.join(ui, 'life.js'));
 const C = require(path.join(ui, 'choices.js'));
 const P = require(path.join(ui, 'policy.js'));
 const T = require(path.join(ui, 'travel.js'));
+const A = require(path.join(ui, 'agenda.js'));
+const R = require(path.join(ui, 'recovery.js'));
+const Rel = require(path.join(ui, 'relations.js'));
 function load(name, globals = {}) {
- const context = vm.createContext({ObserverLife:L, ObserverPolicy:P, ObserverGoalMemory:M,
+ const context = vm.createContext({ObserverLife:L, ObserverPolicy:P, ObserverGoalMemory:M, ObserverRecovery:R, ObserverRelations:Rel, ObserverAgenda:A,
   ObserverChoices:C, setTimeout:fn => {fn(); return 0;}, ...globals});
  vm.runInContext(fs.readFileSync(path.join(ui, name), 'utf8'), context);
  return context;
@@ -330,7 +333,7 @@ function appHarness(execute=()=>({})) {
   inzoi:{cli:{execute},view:{},saveState:{register:fn=>collect=fn,onLoad:fn=>deliver=fn}},
   setInterval:(fn,ms)=>intervals.set(ms,fn),setTimeout:()=>0,clearTimeout(){},addEventListener(){}});
  context.window=context;
- for(const name of ['window','policy','protocol','life','goal-memory','choices','life-actions','panels','travel','app'])
+ for(const name of ['window','policy','protocol','life','goal-memory','agenda','recovery','relations','choices','life-actions','panels','travel','app'])
   vm.runInContext(fs.readFileSync(path.join(ui,name+'.js'),'utf8'),context,{filename:name+'.js'});
  return {context,intervals,load:value=>deliver(JSON.stringify(value)),collect:()=>collect()};
 }

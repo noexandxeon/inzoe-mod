@@ -39,6 +39,8 @@ def main():
         assert (UI / name).is_file(), name
         assert f'/ui/HouseholdObserver/{name}' in manifest['NonAssets'], name
     assert parser.sources.index('goal-memory.js') < parser.sources.index('life-actions.js')
+    for name in ('agenda.js', 'recovery.js', 'relations.js'):
+        assert parser.sources.index(name) < parser.sources.index('life-actions.js'), name
     version = json.loads((MOD / 'ZoiObserver_XDX478.uplugin').read_text(encoding='utf-8'))['VersionName']
     assert f"VERSION='{version}'" in (UI / 'app.js').read_text(encoding='utf-8')
     assert f'Zoi Observer {version}' in (UI / 'index.html').read_text(encoding='utf-8')

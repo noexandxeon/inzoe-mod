@@ -41,13 +41,13 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
 p { margin:6px 0; line-height:1.45; } .buttons { display:flex; margin:12px 0; } button { background:#254951; border:1px solid #658d91; padding:7px 15px; border-radius:4px; margin-right:8px; cursor:pointer; font-size:17px; }
 #start { background:#275e4c; } #stop { background:#65413f; } .help,.limit { font-size:13px; color:#b8cacd; }
 .person { padding:10px 0; border-bottom:1px solid #3a5158; font-size:14px; } .person b { font-size:18px; }
-.need { display:inline-block; background:#28424a; padding:4px; margin:2px; font-size:13px; } .urgent { background:#7e493b; }
+.need { display:inline-block; background:#28424a; padding:4px; margin:2px; font-size:13px; } .urgent { background:#7e493b; } .intent { color:#e8f3c8; font-weight:bold; }
 #log { height:140px; overflow-y:auto; margin-top:12px; padding:8px; background:#102027; white-space:pre-wrap; word-wrap:break-word; overflow-wrap:break-word; text-align:left; font-size:12px; font-family:var(--inzoi-font-mono); }
 </style></head>
 <body>
 <div id="app-root">
   <div id="title-bar">
-    <span id="title-text">Zoi Observer 0.4.5</span>
+    <span id="title-text">Zoi Observer 0.4.6</span>
     <div id="title-buttons">
       <span id="minimize-btn">_</span>
       <span id="close-btn">X</span>
@@ -74,6 +74,9 @@ p { margin:6px 0; line-height:1.45; } .buttons { display:flex; margin:12px 0; } 
 <script src="protocol.js"></script>
 <script src="life.js"></script>
 <script src="goal-memory.js"></script>
+<script src="agenda.js"></script>
+<script src="recovery.js"></script>
+<script src="relations.js"></script>
 <script src="choices.js"></script>
 <script src="life-actions.js"></script>
 <script src="panels.js"></script>

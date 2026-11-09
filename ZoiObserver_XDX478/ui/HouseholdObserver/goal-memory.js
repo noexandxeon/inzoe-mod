@@ -8,7 +8,7 @@
   if(!item)item=memory[id]={name:plan.name,kind:plan.kind||'hope',instance:plan.instance,
    phase:'ready',firstSeen:minute,failures:{},history:[]};
   item.failures=item.failures||{};item.history=item.history||[];
-  if(item.lastSeen>minute){item.failures={};item.practice=null;}
+  if(item.lastSeen>minute){item.failures={};item.practice=null;item.block=null;if(item.prep)item.prep.grown=null;}
   item.lastSeen=minute;
   plan.memory=item;
   return item;
@@ -61,8 +61,41 @@
    skill?'기술 성장 확인 후 원래 목표 재평가':'게임 미션 진행 확인',minute);
   if(skill){practiceAllowed(decision,plan,minute);item.practice.sessions++;}
  }
+ // Goal flow: 목표 → 필요(기술·물건·상대) → 준비(연습·구매·외출) → 원래 목표 재시도 → 완료 확인.
+ var STEPS=['need','prepare','retry','confirm','done'];
+ var STEP_LABELS={need:'필요 조건 확인',prepare:'준비 중',retry:'원래 목표 재시도',confirm:'완료 확인 대기',done:'완료'};
+ function flow(decision,plan,step,patch,minute){
+  var item=record(decision,plan,minute), f=item.flow||(item.flow={});
+  if(STEPS.indexOf(step)<0)step='need';
+  Object.keys(patch||{}).forEach(function(k){f[k]=patch[k];});
+  if(f.step!==step)f.since=minute;
+  f.step=step;f.at=minute;
+  return f;
+ }
+ function flowText(item){
+  var f=item&&item.flow;
+  if(!f)return null;
+  var parts=['목표'];
+  if(f.need)parts.push('필요: '+f.need);
+  if(f.prep)parts.push('준비: '+f.prep);
+  parts.push('재시도');parts.push('완료 확인');
+  return parts.join(' → ')+' · 현재 '+(STEP_LABELS[f.step]||f.step);
+ }
+ // A preparation the goal depends on (e.g. a skill inferred from a disabled action).
+ function prepare(decision,plan,prep,minute){
+  var item=record(decision,plan,minute);
+  if(!item.prep||item.prep.skill!==prep.skill||item.prep.kind!==prep.kind)item.prep=Object.assign({since:minute},prep);
+  flow(decision,plan,'prepare',{need:prep.need||prep.skill,prep:prep.label||null},minute);
+  return item.prep;
+ }
+ function prepared(decision,plan,minute,evidence){
+  var item=record(decision,plan,minute);
+  if(item.prep){item.prep.grown=minute;item.prep.evidence=evidence||null;}
+  flow(decision,plan,'retry',{},minute);
+  return item;
+ }
  var api={key:key,record:record,note:note,sync:sync,allowed:allowed,failed:failed,
-  practiceAllowed:practiceAllowed,started:started};
+  practiceAllowed:practiceAllowed,started:started,flow:flow,flowText:flowText,prepare:prepare,prepared:prepared,STEP_LABELS:STEP_LABELS};
  if(typeof module!=='undefined'&&module.exports)module.exports=api;
  else root.ObserverGoalMemory=api;
 })(this);
