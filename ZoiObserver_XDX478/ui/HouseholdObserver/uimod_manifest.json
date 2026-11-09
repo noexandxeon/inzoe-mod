@@ -1,0 +1,31 @@
+{
+  "name": "HouseholdObserver",
+  "version": "1.0.0",
+  "description": "",
+  "author": "",
+  "entry": "index.html",
+  "display": {
+    "width": 1920,
+    "height": 1080,
+    "transparent": true,
+    "input_policy": "overlay"
+  },
+  "triggers": [
+    {
+      "id": "householdobserver",
+      "type": "game_mode",
+      "mode": [
+        "TopView",
+        "ShoulderView",
+        "ActiveMode",
+        "DiveView",
+        "Vehicle",
+        "Photo",
+        "FreeCamera",
+        "Map",
+        "Build"
+      ],
+      "action": "show"
+    }
+  ]
+}

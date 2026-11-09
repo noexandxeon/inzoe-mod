@@ -1,0 +1,5 @@
+{
+  "apps": [
+    { "name": "HouseholdObserver", "enabled": true }
+  ]
+}
