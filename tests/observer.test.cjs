@@ -9,9 +9,15 @@ const L = require(path.join(ui, 'life.js'));
 const C = require(path.join(ui, 'choices.js'));
 const P = require(path.join(ui, 'policy.js'));
 const T = require(path.join(ui, 'travel.js'));
+const A = require(path.join(ui, 'agenda.js'));
+const R = require(path.join(ui, 'recovery.js'));
+const Rel = require(path.join(ui, 'relations.js'));
+const Data = require(path.join(ui, 'game-data.js'));
+const Care = require(path.join(ui, 'child-care.js'));
+// Every shared module the mod's script order provides, so these older scenarios run against the current code.
 function load(name, globals = {}) {
- const context = vm.createContext({ObserverLife:L, ObserverPolicy:P, ObserverGoalMemory:M,
-  ObserverChoices:C, setTimeout:fn => {fn(); return 0;}, ...globals});
+ const context = vm.createContext({ObserverLife:L, ObserverPolicy:P, ObserverGoalMemory:M, ObserverRecovery:R, ObserverRelations:Rel, ObserverAgenda:A,
+  ObserverGameData:Data, ObserverChildCare:Care, ObserverChoices:C, setTimeout:fn => {fn(); return 0;}, ...globals});
  vm.runInContext(fs.readFileSync(path.join(ui, name), 'utf8'), context);
  return context;
 }
@@ -116,10 +122,15 @@ test('practice without a level-up stays in preparation, does not assume failure,
  assert.equal(h.writes[1][1].target_entity_id,'21');
  assert.ok(!h.logs.some(line=>line.includes('성장 확인')));
 });
-test('a queued game action prevents new hope training requests',async() => {
- const h=lifeHarness(); h.snapshot.queue.queue_count=1;
- assert.equal(await h.actions.pursueHope(h.member,h.character,h.decision,h.snapshot,{day:0,hour:10},600,1),false);
- assert.equal(h.writes.length,0);
+// 0.4.4 blocked on any queued command. Since 0.4.7 the mod may use free queue slots (the player asked for the
+// 7-slot queue to be used), so the block now applies to a full share of the queue or a trip waiting in it.
+test('a full queue share or a queued trip prevents new hope training requests',async() => {
+ const full=lifeHarness(); full.snapshot.queue.queue_count=L.QUEUE_LIMIT;
+ assert.equal(await full.actions.pursueHope(full.member,full.character,full.decision,full.snapshot,{day:0,hour:10},600,1),false);
+ assert.equal(full.writes.length,0);
+ const trip=lifeHarness(); trip.snapshot.queue={queue_count:1,items:['LLM_WalkToSite']};
+ assert.equal(await trip.actions.pursueHope(trip.member,trip.character,trip.decision,trip.snapshot,{day:0,hour:10},600,1),false);
+ assert.equal(trip.writes.length,0);
 });
 test('a real experience change at the same level is evidence without marking the hope complete',async()=>{
  const h=lifeHarness();
@@ -330,7 +341,9 @@ function appHarness(execute=()=>({})) {
   inzoi:{cli:{execute},view:{},saveState:{register:fn=>collect=fn,onLoad:fn=>deliver=fn}},
   setInterval:(fn,ms)=>intervals.set(ms,fn),setTimeout:()=>0,clearTimeout(){},addEventListener(){}});
  context.window=context;
- for(const name of ['window','policy','protocol','life','goal-memory','choices','life-actions','panels','travel','app'])
+ // The mod's own script order, read from index.html so a new module cannot be forgotten here again.
+ const order=[...fs.readFileSync(path.join(ui,'index.html'),'utf8').matchAll(/<script src="([a-z-]+)\.js"/g)].map(m=>m[1]).filter(n=>n!=='devprobe');
+ for(const name of order)
   vm.runInContext(fs.readFileSync(path.join(ui,name+'.js'),'utf8'),context,{filename:name+'.js'});
  return {context,intervals,load:value=>deliver(JSON.stringify(value)),collect:()=>collect()};
 }

@@ -212,6 +212,12 @@
     function applyWindowState(state) {
         if (!state) return;
         var c = clampToViewport(state.x, state.y, state.w, state.h);
+        var viewportWidth = window.innerWidth || document.documentElement.clientWidth || 1920;
+        var viewportHeight = window.innerHeight || document.documentElement.clientHeight || 1080;
+        if (Number.isFinite(state.x) && (state.x < 0 || state.x + 160 > viewportWidth)) c.x = 24;
+        if (Number.isFinite(state.y) && (state.y < 0 || state.y + 48 > viewportHeight)) c.y = 24;
+        if (Number.isFinite(c.x) && Number.isFinite(c.w)) c.x = Math.max(0, Math.min(c.x, viewportWidth - c.w));
+        if (Number.isFinite(c.y) && Number.isFinite(c.h)) c.y = Math.max(0, Math.min(c.y, viewportHeight - c.h));
         if (typeof c.x === 'number') root.style.left   = c.x + 'px';
         if (typeof c.y === 'number') root.style.top    = c.y + 'px';
         if (typeof c.w === 'number') root.style.width  = c.w + 'px';
@@ -274,6 +280,18 @@
     root._saveWindowStateSoon = saveWindowStateSoon;
     root._saveWindowState     = saveWindowState;
 
+    if (inzoi.trigger && typeof inzoi.trigger.onActivated === 'function') {
+        inzoi.trigger.onActivated(function (trigger) {
+            if (!trigger || trigger.type !== 'keybind' || String(trigger.key).toUpperCase() !== 'O') return;
+            if (inzoi.view && typeof inzoi.view.show === 'function') {
+                Promise.resolve(inzoi.view.show()).catch(function () {});
+            }
+            if (typeof root._applyMinimize === 'function') root._applyMinimize(false);
+            applyWindowState({x:40, y:60});
+            saveWindowState();
+        });
+    }
+
     // Save on visibility hide AND on page unload (covers always_on unmount)
     document.addEventListener('visibilitychange', function () {
         if (document.hidden) saveWindowState();
@@ -290,9 +308,10 @@
     (function() {
         var minBtn   = document.getElementById('minimize-btn');
         var titleBar = document.getElementById('title-bar');
-        minBtn.textContent = '_';
         function applyMinimize(bMin) {
             root._minimized = !!bMin;
+            minBtn.textContent = bMin ? '펼치기' : '숨기기';
+            minBtn.setAttribute('aria-expanded', String(!bMin));
             if (bMin) {
                 // display:none 상태에서 offsetWidth/Height 는 0 반환 -> inline style 우선 읽기
                 if (root._savedW == null) root._savedW = root.offsetWidth  || (root.style.width  ? parseFloat(root.style.width)  : null);
@@ -300,15 +319,12 @@
                 content.style.display = 'none';
                 var rh = document.getElementById('resize-handle');
                 if (rh) rh.style.display = 'none';
-                if (minBtn) minBtn.style.display = 'none';
                 root.style.width  = 'auto';
                 root.style.height = 'auto';
             } else {
                 content.style.display = '';
                 var rh2 = document.getElementById('resize-handle');
                 if (rh2) rh2.style.display = '';
-                // '' 로 inline override 제거 -> CSS 규칙(inline-block)이 복원됨
-                if (minBtn) minBtn.style.display = '';
                 if (root._savedW != null) root.style.width  = root._savedW + 'px';
                 if (root._savedH != null) root.style.height = root._savedH + 'px';
             }

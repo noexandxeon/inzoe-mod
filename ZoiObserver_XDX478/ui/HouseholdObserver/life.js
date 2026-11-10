@@ -9,10 +9,10 @@
   Cleanliness:/^Shower\d+$|^Use_Bath\d+$/
  };
  var fixtureIds={
-  Hunger:/^Fridge(?!.*Broke)/i,
-  Sleep:/^(?:Bed\d|BedAssemble|BunkBed|Sofa\d)/i,
-  Toilet:/^Toilet\d/i,
-  Cleanliness:/^(?:Shower|Bath\d|Bathtub)/i
+  Hunger:/(?:^|_)Fridge\d(?!.*Broke)/i,
+  Sleep:/(?:^|_)(?:Bed\d|BedAssemble|BunkBed|Sofa\d)/i,
+  Toilet:/(?:^|_)Toilet\d/i,
+  Cleanliness:/(?:^|_)(?:Shower|Bath\d|Bathtub)/i
  };
  var romanceTalk=/^Co_Romance_R\d+(?:_2)?$/;
  var romanceActions={
@@ -35,9 +35,29 @@
   return (queue.queue_count||0)===0&&(!bag||
     /^(?:Self_Idle_|Use_SmartPhone_|Use_TV_|Self_SmartPhone_|Bookshelf_SitRead_|Self_SLM_(?:Read|Watch)_)/i.test(bag));
  }
+ // 0.4.7: goals may queue behind the Zoi's own autonomous action. Requiring a fully idle Zoi
+ // (relaxed) meant ambitions were never tried in game: 28 agenda turns, 0 attempts, autonomy always busy.
+ // 0.4.7: a trip starts only with enough needs left for the way there and back
+ // (in game a search trip left at low hunger and the Zoi came back at 9%).
+ function tripReady(stats){
+  return ['Hunger','Toilet','Sleep'].every(function(k){var v=percent(stats,k);return v===null||v>=40;})&&
+   (percent(stats,'Cleanliness')===null||percent(stats,'Cleanliness')>=25);
+ }
+ var TRAVEL=/^(?:Go_|RabbitHole|Commute|Self_GoHome|LLM_WalkToSite|WalkToSite|Self_GoTo|Vehicle_|Ride_|Taxi_)/i;
+ var QUEUE_LIMIT=4; // of the game's 7 slots; the rest stay free for the player and autonomy
+ function goalReady(queue,work){
+  var bag=queue&&queue.current&&queue.current.interaction_bag_id||'';
+  if(sleeping(queue,work))return false;
+  if((queue&&queue.queue_count||0)>=QUEUE_LIMIT)return false;
+  // A trip already waiting in the queue: actions added now would run at the wrong place or delay the trip.
+  if((queue&&queue.items||[]).some(function(b){return TRAVEL.test(b);}))return false;
+  // Not while travelling between places: an action queued on the way targets the wrong site
+  // (in game: '일상복으로 갈아입기' queued while walking home failed as unreachable).
+  return !/^(?:Go_|RabbitHole|Work_|Commute|Self_GoHome|LLM_WalkToSite|WalkToSite|Self_GoTo|Vehicle_|Ride_|Taxi_)/i.test(bag);
+ }
  function sleeping(queue,work){
   var bag=queue.current&&queue.current.interaction_bag_id||'';
-  return /^(?:Sleep_|Sleeping_|Self_Sleep_|Nap_|Self_Nap_)/i.test(bag)||work&&work.is_sleeping===true;
+  return /^(?:Sleep_|Sleeping_|Self_Sleep_|Nap_|Self_Nap_|Self_(?:Infant|Toddler)_Sleep$|Object_KidBed\d+_Toddler_Sleep$)/i.test(bag)||work&&work.is_sleeping===true;
  }
  function fixtureMatches(need,tableId){return !!fixtureIds[need]&&fixtureIds[need].test(tableId||'');}
  function needChoice(need,available){
@@ -202,10 +222,71 @@
   if(/Coffee|Espresso/i.test(clue))return [['Coffee','Orderable']];
   if(/ReadNewspaper|Read.*Book|Book.*Read|StudyAtLibrary/i.test(clue))return [['Hope_Library'],['AR_Library']];
   if(/Painting|Easel|Drawing|LearnArt/i.test(clue))return [['TPO_Site_Activity_Art'],['Hope_Art']];
+  // 0.4.7: venues read from the Site table tags of the live city (Cahaya checked in game).
+  if(/Fishing/i.test(clue))return [['TPO_Site_Activity_Fishing']];
+  if(/Swim/i.test(clue))return [['TPO_Site_Activity_Swim'],['SiteTag_Beach']];
+  if(/Collect|Shell|Beach|Sand/i.test(clue))return [['SiteTag_Beach']];
+  if(/StreetFood|NightMarket/i.test(clue))return [['TPO_Site_Activity_StreetFood'],['SiteTag_Market']];
+  if(/BallGame|Basketball|Soccer|Volleyball/i.test(clue))return [['TPO_Site_Activity_BallGame'],['RandomEvent_PlayGround']];
+  if(/Arcade/i.test(clue))return [['Arcade'],['TPO_Site_Workplace_Arcade']];
+  if(/Club|Dance/i.test(clue))return [['Club']];
+  if(/Temple|Pray/i.test(clue))return [['Temple']];
+  if(/GoPark|Park_|Picnic|Jogging|Walk/i.test(clue))return [['SiteTag_Park']];
+  // Street furniture (fire hydrants, ATMs, ticket machines, signs) stands around markets and parks.
+  if(/Destroy_Furniture|Kicking|Fireplug|Vandal/i.test(clue))return [['SiteTag_Market'],['SiteTag_Park']];
   return [];
  }
+ // 0.4.7: the object an action is used on, read from the action id (Computer_Use_Search → Computer,
+ // Object_ATM01_Kicking_Lv3 → ATM, Bookshelf_SitRead_Art → Bookshelf). Used to pick the right furniture
+ // instead of the 20 nearest objects (in game the computer and bookshelf were never among them).
+ var GENERIC=/^(?:Object|Next|Res|Self|Co|Coop|Click|Use|Sit|Stand|Play|Go|Hope|Mission|Trait|Ambition|Event|LLM|HHB|CoopHHB)$/i;
+ function objectHints(bags){
+  var words={};
+  (bags||[]).forEach(function(b){
+   var parts=String(b).split('_');
+   for(var i=0;i<parts.length&&i<3;i++){
+    var w=parts[i].replace(/\d+$/,'');
+    if(w.length>=3&&!GENERIC.test(w)){words[w]=true;break;}
+   }
+  });
+  var list=Object.keys(words);
+  return list.length?new RegExp(list.join('|'),'i'):null;
+ }
+ // 0.4.7: site ids that usually hold the action (used to rank the city-wide search).
+ function goalVenueIds(clue){
+  if(/MovieScreen|WatchMovie|Movie_/i.test(clue))return /Cinema|Movie/i;
+  if(/Fishing/i.test(clue))return /Pier1|Fishing|Tackle/i;
+  if(/Kicking|Destroy_Furniture|Vending|ATM/i.test(clue))return /CVS|NightMarket|Market|Park|Mart/i;
+  if(/Library|Read/i.test(clue))return /Library/i;
+  if(/Swim|Pool/i.test(clue))return /Pool|Beach/i;
+  return null;
+ }
+ // 0.4.7: a goal that needs one household object, and the object the mod may buy for it.
+ var homeItems=[
+  {test:/SearchNews|WebSurf|ComputerUse|Computer_Use|Laptop_Use|GetLicense/i,item:'Computer01',fixture:/Computer|Laptop|Desktop/i,max:1200,label:'컴퓨터'},
+  {test:/^Art$|Hope_Preference_Drawing|Drawing|Easel/i,item:'Easel01',fixture:/Easel|Mural|Canvas/i,max:300,label:'이젤'},
+  {test:/^Instruments$|LearnInstrument|Guitar/i,item:'Guitar01',fixture:/Guitar|Piano|Keyboard|Violin|Drum/i,max:700,label:'기타'}
+ ];
+ // Object template tags from game conditions (IsSiteHasObjectTemplateTag) → a buyable item key.
+ function itemForTag(tag){
+  if(/Computer|Laptop/i.test(tag))return 'ComputerUse';
+  if(/Easel|Canvas/i.test(tag))return 'Easel';
+  if(/Guitar|Instrument|Piano/i.test(tag))return 'Guitar';
+  return null;
+ }
+ function goalHomeItem(name,condition,bags){
+  var clue=[name,condition].concat(bags||[]).join(' ');
+  return homeItems.find(function(h){return h.test.test(condition)||h.test.test(clue);})||null;
+ }
+ // 0.4.7: hygiene and hunger are handled before they turn urgent when the Zoi is at home and idle.
+ function routineNeed(stats){
+  return [{key:'Cleanliness',limit:40},{key:'Hunger',limit:35},{key:'Toilet',limit:35}]
+   .map(function(n){return {key:n.key,pct:percent(stats,n.key),limit:n.limit};})
+   .filter(function(n){return n.pct!==null&&n.pct<=n.limit;})
+   .sort(function(a,b){return a.pct-b.pct;})[0]||null;
+ }
 
- var api={adultAge:adultAge,urgentNeed:urgentNeed,relaxed:relaxed,fixtureMatches:fixtureMatches,needChoice:needChoice,goalVenueTags:goalVenueTags,
+ var api={itemForTag:itemForTag,tripReady:tripReady,objectHints:objectHints,QUEUE_LIMIT:QUEUE_LIMIT,TRAVEL:TRAVEL,adultAge:adultAge,goalVenueIds:goalVenueIds,goalReady:goalReady,urgentNeed:urgentNeed,routineNeed:routineNeed,goalHomeItem:goalHomeItem,relaxed:relaxed,fixtureMatches:fixtureMatches,needChoice:needChoice,goalVenueTags:goalVenueTags,
   relationshipEntry:relationshipEntry,relationshipStage:relationshipStage,hasOtherPartner:hasOtherPartner,
   romanceChoice:romanceChoice,dayBudget:dayBudget,ledgerCheckpoint:ledgerCheckpoint,matchingDebit:matchingDebit,
   entrepreneur:entrepreneur,sideJobs:sideJobs,housingChoice:housingChoice,

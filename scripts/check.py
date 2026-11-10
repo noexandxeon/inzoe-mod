@@ -32,13 +32,16 @@ def main():
     parser = Scripts()
     parser.feed((UI / 'index.html').read_text(encoding='utf-8'))
     assert parser.sources[:3] == ['coui://inzoi/cohtml.js', 'coui://inzoi/mod/inzoi-sdk.js', 'window.js']
-    assert parser.sources[-1] == 'app.js'
+    assert parser.sources[-2:] == ['app.js', 'devprobe.js']
     local = [name for name in parser.sources if '://' not in name]
     assert len(local) == len(set(local)), 'Duplicate script include'
     for name in local:
         assert (UI / name).is_file(), name
         assert f'/ui/HouseholdObserver/{name}' in manifest['NonAssets'], name
     assert parser.sources.index('goal-memory.js') < parser.sources.index('life-actions.js')
+    assert parser.sources.index('child-care.js') < parser.sources.index('app.js')
+    assert parser.sources.index('scoreboard.js') < parser.sources.index('app.js')
+    assert parser.sources.index('game-data.js') < parser.sources.index('life-actions.js')
     version = json.loads((MOD / 'ZoiObserver_XDX478.uplugin').read_text(encoding='utf-8'))['VersionName']
     assert f"VERSION='{version}'" in (UI / 'app.js').read_text(encoding='utf-8')
     assert f'Zoi Observer {version}' in (UI / 'index.html').read_text(encoding='utf-8')
