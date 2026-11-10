@@ -10,6 +10,7 @@
   item.failures=item.failures||{};item.history=item.history||[];
   if(item.lastSeen>minute){item.failures={};item.practice=null;item.block=null;if(item.prep)item.prep.grown=null;}
   item.lastSeen=minute;
+  if(plan.expire_ticks>0)item.expire=plan.expire_ticks/600000000;
   plan.memory=item;
   return item;
  }
@@ -30,12 +31,19 @@
   Object.keys(memory).forEach(function(id){
    var item=memory[id];
    if(item.kind===(kind||'hope')&&!active[id]&&item.phase!=='completed'&&item.phase!=='ended'){
-    item.phase='ended';item.reason='게임 목록에서 종료 · 완료 여부 미확인';item.next='새 목표 확인';
+    var verdict=gone(item,minute);
+    item.phase=verdict.phase;item.reason=verdict.reason;item.next='새 목표 확인';
+    item.history.push({minute:minute,phase:verdict.phase,reason:verdict.reason});item.history=item.history.slice(-8);
    }
   });
   // Keep all active plans and a bounded recent history across long sessions.
   Object.keys(memory).filter(function(id){return /^(completed|ended)$/.test(memory[id].phase);})
    .sort(function(a,b){return memory[b].lastSeen-memory[a].lastSeen;}).slice(16).forEach(function(id){delete memory[id];});
+ }
+ // The game may remove or replace a hope without exposing the reason.
+ function gone(item,minute){
+  if(Number.isFinite(item.expire)&&minute>=item.expire)return {phase:'ended',reason:'기한 만료 후 목록에서 종료'};
+  return {phase:'ended',reason:'게임 목록에서 종료 · 완료 여부 미확인'};
  }
  function attemptKey(bag,target){return JSON.stringify([bag,String(target||'')]);}
  function allowed(decision,plan,bag,target,minute){
@@ -60,6 +68,7 @@
    skill?'선행 기술 연습 요청 · 성장 확인 대기':'행동 요청 · 실제 진행 확인 대기',
    skill?'기술 성장 확인 후 원래 목표 재평가':'게임 미션 진행 확인',minute);
   if(skill){practiceAllowed(decision,plan,minute);item.practice.sessions++;}
+  item.lastAction=minute;
  }
  // Goal flow: 목표 → 필요(기술·물건·상대) → 준비(연습·구매·외출) → 원래 목표 재시도 → 완료 확인.
  var STEPS=['need','prepare','retry','confirm','done'];
@@ -85,6 +94,10 @@
  function prepare(decision,plan,prep,minute){
   var item=record(decision,plan,minute);
   if(!item.prep||item.prep.skill!==prep.skill||item.prep.kind!==prep.kind)item.prep=Object.assign({since:minute},prep);
+  else if(Number.isFinite(prep.requiredLevel)){
+   item.prep.requiredLevel=prep.requiredLevel;
+   item.prep.need=prep.need;
+  }
   flow(decision,plan,'prepare',{need:prep.need||prep.skill,prep:prep.label||null},minute);
   return item.prep;
  }
@@ -94,7 +107,7 @@
   flow(decision,plan,'retry',{},minute);
   return item;
  }
- var api={key:key,record:record,note:note,sync:sync,allowed:allowed,failed:failed,
+ var api={gone:gone,key:key,record:record,note:note,sync:sync,allowed:allowed,failed:failed,
   practiceAllowed:practiceAllowed,started:started,flow:flow,flowText:flowText,prepare:prepare,prepared:prepared,STEP_LABELS:STEP_LABELS};
  if(typeof module!=='undefined'&&module.exports)module.exports=api;
  else root.ObserverGoalMemory=api;

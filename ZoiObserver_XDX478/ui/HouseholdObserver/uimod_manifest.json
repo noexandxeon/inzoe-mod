@@ -26,6 +26,13 @@
         "Build"
       ],
       "action": "show"
+    },
+    {
+      "id": "observer-show",
+      "type": "keybind",
+      "key": "O",
+      "modifiers": ["Ctrl", "Shift"],
+      "action": "show"
     }
   ]
 }

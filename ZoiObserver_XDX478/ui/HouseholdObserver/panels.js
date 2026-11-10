@@ -84,7 +84,7 @@
    });
    decision.preferences={saved:stored,pending:wanted.map(function(x){return x.id;})};
    if(!wanted.length){decision.nextTaste=minute+360;return;}
-   if(background())return;
+   if(background())return ObserverAgenda.result('waiting','화면 입력 대기',minute+30);
    if(!current.some(function(x){return String(x.entity_id)===id;})||!await freeHud())return;
    var profileIcon=profileButton(nodes(await tree('Hud')));
    if(!profileIcon)return;
@@ -181,7 +181,10 @@
     }
     var chosen=Object.keys(stored).map(function(k){return k.toLowerCase();});
     decision.preferences={saved:stored,pending:wanted.filter(function(x){return chosen.indexOf(x.id.toLowerCase())<0;}).map(function(x){return x.id;})};
-    if(changed.length)log(member.first_name+': 취향 자동 반영 확인 / '+changed.join(', '));
+    if(changed.length){
+     log(member.first_name+': 취향 자동 반영 확인 / '+changed.join(', '));
+     return ObserverAgenda.result('verified',changed.length+'개 취향 반영');
+    }
    }finally{
     if(editor&&editor.ui_type==='PreferenceSelect')await click(button(nodes(editor),'/BW_Button_Close'),token,actor);
     if(panel&&panel.ui_type==='CatOperator')await click(nodes(await tree('CatOperator')).find(function(n){return C.usable(n)&&n.ref===panel.window+'/BW_Button_Close';}),token,actor);
@@ -526,11 +529,12 @@
   }
   async function market(member,decision,snapshot,minute,token,need){
    if(!need)return false;
-   if(background()&&need.kind!=='food'){
-    decision.marketStatus=(need.kind==='clean'?'먼지 '+need.dust+'곳 · 청소 도우미':'수리 기사')+' 대기 · 다른 작업 모드';
+   // 0.4.7: home services are ordered in 다른 작업 모드 too, with internal (Force) clicks that never move the mouse.
+   // Before, cleaning waited forever there even past the 8-dust limit (seen in game: 19-21 dust, no order).
+   if(!await freeHud()){
+    decision.marketStatus=(need.kind==='clean'?'먼지 '+need.dust+'곳 · 청소 도우미':need.kind==='repair'?'수리 기사':'음식')+' 주문 대기 · 다른 창이 열려 있음';
     return false;
    }
-   if(!await freeHud())return false;
    var id=String(member.entity_id), household=String(member.household_id), key=household+':'+need.kind;
    var history=api.state?(api.state.marketOrders||(api.state.marketOrders={})):orders;
    if(history[key]>minute){decision.marketStatus='최근 같은 종류 주문 확인';return false;}
@@ -551,7 +555,8 @@
      list=nodes(await tree('Smartphone'));
      var category=need.kind==='repair'?/^(?:수리 기사|Repair(?:man| Service)?)$/i:/^(?:청소 도우미|Clean(?:er|ing Service)?)$/i;
      var entry=list.find(function(n){return n.role==='entry'&&n.ref&&/\/BW_ListView_Category\//.test(n.ref)&&category.test(C.clean(n.text));});
-     if(!await click(entry,token,id,false))return false;
+     if(!await click(entry,token,id,background()?true:false))return false;
+     if(background())await wait(350);
      list=nodes(await tree('Smartphone'));
      if(!list.some(function(n){return n.role==='entry'&&n.ref===entry.ref&&String(n.state||'').indexOf('selected')>=0;})){
       await wait(250);
@@ -592,10 +597,21 @@
    }
   }
   async function catShop(member,decision,snapshot,minute,token){
-   var fallback=decision.needFallback, actor=String(member.entity_id);
-   if(!fallback||minute>fallback.until||minute<(decision.nextCatShop||0)||
-      String(game().possessed_entity_id)!==actor||!L.relaxed(snapshot.queue)||!await freeHud())return false;
-   var itemId=C.catDonut(fallback.key,snapshot.stats.stats[fallback.key]);
+   // 0.4.7: emergency only. A donut is used when a need stays critical (normal fix failed, or 45 game
+   // minutes without recovery), at most once per need and twice in total per game day.
+   var actor=String(member.entity_id), stats=snapshot.stats.stats, day=Math.floor(minute/1440);
+   if(String(game().possessed_entity_id)!==actor||L.sleeping(snapshot.queue,snapshot.work)||minute<(decision.nextCatShop||0))return false;
+   var uses=decision.catUses&&decision.catUses.day===day?decision.catUses:(decision.catUses={day:day,count:0,needs:{}});
+   if(uses.count>=2)return false;
+   var low=decision.catLow||(decision.catLow={}), fallback=null;
+   ['Toilet','Hunger','Sleep','Cleanliness'].forEach(function(key){
+    if(!C.catDonut(key,stats[key])){delete low[key];return;}
+    if(low[key]==null||low[key]>minute)low[key]=minute;
+    var stuck=decision.needFallback&&decision.needFallback.key===key&&minute<=decision.needFallback.until;
+    if(!fallback&&!uses.needs[key]&&(stuck||minute-low[key]>=45))fallback={key:key};
+   });
+   if(!fallback||!await freeHud())return false;
+   var itemId=C.catDonut(fallback.key,stats[fallback.key]);
    if(!itemId)return false;
    decision.nextCatShop=minute+60;
    var item=await row('CatShop',itemId);
@@ -629,16 +645,27 @@
     var fresh=await cli('stat.get_all',{entity_id:actor});
     var before=fresh.stats&&fresh.stats[fallback.key];
     if(C.catDonut(fallback.key,before)!==itemId||balance(panel)!==oldBalance)return false;
-    await click(products[0],token,actor);await wait();
+    await click(products[0],token,actor);await wait(400);
+    // 0.4.7: the product opens a purchase confirmation (CatShopBuy). In game it stayed open, the mod's
+    // general popup handler then pressed 취소. Confirm it here with the positive button (btn0).
+    var confirm=await cli('ui.get_blocking');
+    var buy=(confirm.popups||[]).find(function(p){return p.popup_id==='CatShopBuy';});
+    if(buy){
+     var yes=(buy.buttons||[]).find(function(b){return b.list_key==='btn0'&&b.dimmed===false;});
+     if(!yes){log(member.first_name+': 냥스토어 구매 확인 버튼을 찾지 못함');return false;}
+     await write('ui.click_popup_button',{popup_id:'CatShopBuy',list_key:'btn0'},token,'CatShopBuy',actor);
+     await wait(900);
+    }
     var after=await cli('stat.get_all',{entity_id:actor}), newBalance=balance(await tree('CatOperator'));
     var stat=after.stats&&after.stats[fallback.key];
     if(stat&&stat.pct>=before.pct+30&&oldBalance-newBalance===item.price){
-     decision.needFallback=null;decision.nextCatShop=minute+720;
-     log(member.first_name+': 냥스토어 구매·사용 확인 / '+title+' ('+item.price+'냥코인)');
+     decision.needFallback=null;decision.nextCatShop=minute+240;
+     uses.count++;uses.needs[fallback.key]=true;delete low[fallback.key];
+     log(member.first_name+': 냥스토어 긴급 사용 확인 / '+title+' ('+item.price+'냥코인, 오늘 '+uses.count+'/2)');
      return true;
     }
     if(oldBalance-newBalance===item.price){
-     decision.nextCatShop=minute+720;
+     decision.nextCatShop=minute+240;uses.count++;uses.needs[fallback.key]=true;
      log(member.first_name+': 냥스토어 결제 확인, 효과 적용 확인 대기 / '+title);
      return true;
     }

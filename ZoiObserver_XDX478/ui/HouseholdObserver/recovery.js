@@ -42,7 +42,6 @@
   if(input.noTargets)return 'missing';
   if(input.refused||/거부|refus|reject|not allowed|불가/i.test(text))return 'refused';
   if(input.disabled)return 'condition';
-  if(input.notStarted&&input.sameTargetMisses>=2)return 'path';
   return 'unknown';
  }
  function strategy(kind){return KINDS[kind]||KINDS.unknown;}
@@ -59,20 +58,31 @@
   return memory.block;
  }
  function clear(memory){if(memory)memory.block=null;}
- // Target-level misses: a target that twice accepted a request but never started it is treated
- // as unreachable for a while instead of being retried forever.
- function miss(store,target,minute){
-  if(!target)return 0;
-  var key=String(target), item=store[key]&&store[key].until>minute-720?store[key]:{count:0};
-  item.count++;item.at=minute;item.until=minute+(item.count>=2?240:60);
-  store[key]=item;
-  var keys=Object.keys(store);
-  if(keys.length>40)keys.sort(function(a,b){return store[a].at-store[b].at;}).slice(0,keys.length-40).forEach(function(k){delete store[k];});
-  return item.count;
+ function entityId(value){
+  if(value&&typeof value==='object')value=value.value;
+  return typeof value==='number'||typeof value==='string'&&value!==''?String(value):null;
  }
- function reachable(store,target,minute){
-  var item=store&&store[String(target)];
-  return !item||item.count<2||minute>=item.until;
+ function queueEntries(list,actor){
+  return list.filter(function(entry){
+   if(!entry||typeof entry!=='object')return false;
+   var owner=entityId(entry.ownerEntityId);
+   return !owner||owner===String(actor);
+  }).map(function(entry){
+   return {bag:entry.interactionBagId||entry.interactionBagID||entry.bagId||entry.interaction_bag_id||
+    (entry.interactionInfo&&entry.interactionInfo.interactionBagId),target:entityId(entry.pickedEntityId)};
+  }).filter(function(entry){return typeof entry.bag==='string'&&entry.bag!=='';});
+ }
+ function actionState(queue,request){
+  var target=entityId(request.target);
+  function matches(bag,actual){return !!bag&&bag===request.bag&&(!target||target===entityId(actual));}
+  var current=queue.current||{};
+  if(matches(current.interaction_bag_id,current.target_entity_id))return !current.state||current.state==='Playing'?'playing':'queued';
+  if((queue.entries||[]).some(function(entry){return matches(entry.bag,entry.target);}))return 'queued';
+  if(queue.entries===null&&queue.queue_count>0)return 'unknown';
+  return 'unseen';
+ }
+ function awaitingStart(now,minute,sentAt,sentMinute){
+  return now-sentAt<25000||Number.isFinite(sentMinute)&&minute-sentMinute<25;
  }
 
  // Resume decision after the game reloads a city (travel return, save load, view rebuild).
@@ -122,7 +132,8 @@
   return merged;
  }
  var api={KINDS:KINDS,classify:classify,strategy:strategy,skillFor:skillFor,disabledReason:disabledReason,block:block,clear:clear,
-  miss:miss,reachable:reachable,resumeDecision:resumeDecision,mirrorOf:mirrorOf,mergeProcessed:mergeProcessed};
+  queueEntries:queueEntries,actionState:actionState,awaitingStart:awaitingStart,
+  resumeDecision:resumeDecision,mirrorOf:mirrorOf,mergeProcessed:mergeProcessed};
  if(typeof module!=='undefined'&&module.exports)module.exports=api;
  else root.ObserverRecovery=api;
 })(this);

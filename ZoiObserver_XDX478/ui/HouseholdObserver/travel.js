@@ -132,6 +132,47 @@
    if(!direct)args.hold_ticks=2;
    await write('ui.click',args,token,popup||':travel',trip.actor);
   }
+  var travelWindow={type:'TravelPopup',key:'window',close:'/BW_Button_Close'};
+  var purposeWindow={type:'TravelCityMovePopup',key:'purposeWindow',close:'/BW_WBP_Title/BW_Button_Back'};
+  var phoneWindow={type:'Smartphone',key:'phoneWindow',close:'/WBP_Mobile/WBP_Common_CloseButton/BW_Button'};
+  var preparationWindows=[travelWindow,purposeWindow,phoneWindow];
+  function windowsOf(opened,type){return (opened.windows||[]).filter(function(w){return w.ui_type===type;});}
+  async function rememberOpened(trip,surface){
+   try{
+    var window=unique(windowsOf(await cli('ui.list_windows'),surface.type));
+    if(window&&window.window)trip[surface.key]=window.window;
+   }catch(_){}
+  }
+  function preparing(trip){return state.travel===trip&&trip.stage!=='submitted'&&trip.stage!=='unconfirmed';}
+  function preparationEndReason(trip,time){
+   if(state.background)return '다른 작업 모드 · 미제출 여행 준비 종료';
+   if(time.day!==trip.day||Date.now()-trip.started>110000)return '여행 준비 종료 · 확인되지 않은 예약 단계';
+  }
+  async function closePreparation(trip,game,token){
+   var modal=game.blocking||{};
+   if(modal.popup_count&&!travelOverlay(modal))return false;
+   var attempted=[];
+   while(preparing(trip)&&api.active(token)){
+    var opened=await cli('ui.list_windows');
+    var surface=preparationWindows.find(function(s){return windowsOf(opened,s.type).length>0;});
+    if(!surface)return true;
+    var window=unique(windowsOf(opened,surface.type));
+    if(!window||!window.window||window.window!==trip[surface.key]||attempted.indexOf(surface.type)>=0)return false;
+    var screen=await tree(window.window);
+    var close=screen.window===window.window&&button(screen,window.window+surface.close);
+    if(!close||!preparing(trip)||!api.active(token))return false;
+    attempted.push(surface.type);
+    await click(close.ref,trip,token,true);
+   }
+   return false;
+  }
+  async function stopPreparation(trip,game,token,note){
+   // Travel preparation may own a modal that pauses the game. Release the plan even when it cannot safely close that modal.
+   var closed=false;
+   try{closed=await closePreparation(trip,game,token);}catch(_){}
+   if(preparing(trip))forget(trip,note+(closed?'':' · 게임 화면 확인 필요'));
+   return false;
+  }
   async function available(id,day,minimum){
    var args={entity_id:String(id)};
    var work=await cli('career.get_work_status',args);
@@ -192,9 +233,10 @@
    trip.eligible=trip.eligible.slice(rotation).concat(trip.eligible.slice(0,rotation)).slice(0,count);
    trip.previous=state.lastTravelCity&&state.lastTravelCity[household];
    var phone=button(await tree('Hud',block.blocked),'/WBP_PlayerInfo/BW_Button_SmartPhone');
-   if(!phone)return false;
+   if(!phone||state.background||!api.active(token))return false;
    await click(phone.ref,trip,token,true);
    state.travel=trip;
+   await rememberOpened(trip,phoneWindow);
    describe(trip,'도시 간 1박 여행 준비 중');
    return true;
   }
@@ -252,30 +294,32 @@
     return trip.stage!=='unconfirmed';
    }
    if(String(game.possessed_entity_id)!==trip.actor||game.map_id!==trip.origin){forget(trip,'여행 준비 중 조이가 변경됨');return false;}
-   if(state.background){describe(trip,'도시 여행 화면 선택 대기 · 다른 작업 모드');return true;}
+   var endReason=preparationEndReason(trip,time);
+   if(endReason)return stopPreparation(trip,game,token,endReason);
    var modal=game.blocking||{};
    var overlay=travelOverlay(modal);
    if(modal.popup_count&&!overlay&&trip.stage!=='review')return true;
    var opened=await cli('ui.list_windows');
    function windowFor(name){return (opened.windows||[]).find(function(w){return w.ui_type===name;});}
    var travel=windowFor('TravelPopup'), purpose=windowFor('TravelCityMovePopup'), phone=windowFor('Smartphone');
-   if(time.day!==trip.day||Date.now()-trip.started>110000){
-    var close=travel&&trip.window===travel.window&&button(await tree(travel.window),travel.window+'/BW_Button_Close');
-    if(close&&(!modal.popup_count||overlay))await click(close.ref,trip,token,true);
-    if(!travel&&phone&&!purpose&&!modal.popup_count){
-     var closePhone=button(await tree(phone.window),'/WBP_Common_CloseButton/BW_Button');
-     if(closePhone)await click(closePhone.ref,trip,token,true);
-    }
-    forget(trip,'여행 준비 종료 · 확인되지 않은 예약 단계');return false;
-   }
    if(trip.stage==='phone'&&phone&&!purpose&&!travel){
+    if(trip.phoneWindow&&trip.phoneWindow!==phone.window){forget(trip,'다른 휴대폰 화면이 열려 여행 준비를 종료');return false;}
+    trip.phoneWindow=phone.window;
     var open=button(await tree(phone.window),'/BW_WBP_MoveCity/BW_Button');
-    if(open){await click(open.ref,trip,token,true);trip.stage='purpose';}
+    if(open){
+     await click(open.ref,trip,token,true);trip.stage='purpose';
+     await rememberOpened(trip,purposeWindow);
+    }
     return true;
    }
    if(trip.stage==='purpose'&&purpose){
+    if(trip.purposeWindow&&trip.purposeWindow!==purpose.window){forget(trip,'다른 도시 이동 화면이 열려 여행 준비를 종료');return false;}
+    trip.purposeWindow=purpose.window;
     var go=button(await tree(purpose.window),'/BW_Button_Travel/BW_Button','여행 가기');
-    if(go){await click(go.ref,trip,token,true);trip.stage='city';}
+    if(go){
+     await click(go.ref,trip,token,true);trip.stage='city';
+     if(!travel)await rememberOpened(trip,travelWindow);
+    }
     return true;
    }
    if(modal.popup_count&&!overlay)return true;
@@ -411,6 +455,9 @@
     if(!finalBudget||finalBudget.free<trip.price)return true;
     var latestReview=bookingReview(await tree(travel.window),trip);
     if(!latestReview||!latestReview.confirm||latestReview.confirm.ref!==review.confirm.ref)return true;
+    endReason=preparationEndReason(trip,time);
+    if(endReason)return stopPreparation(trip,game,token,endReason);
+    if(!preparing(trip)||!api.active(token))return false;
     trip.balanceBefore=finalBudget.cash;
     trip.ledgerBefore=L.ledgerCheckpoint(originalWallet);
     trip.checkInBefore=checkInTags(originalCharacter);

@@ -1,13 +1,18 @@
 (function () {
  'use strict';
- var VERSION='0.4.6', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.5.1', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var A=ObserverAgenda, R=ObserverRecovery, Rel=ObserverRelations, M=ObserverGoalMemory;
- var busy=false, epoch=0, index=0, cache={}, profiles={}, rows={}, logs=[], members=[], lastReport=0;
+ var ChildCare=ObserverChildCare;
+ var busy=false, epoch=0, index=0, cache={}, profiles={}, rows={}, members=[], lastReport=0;
+ // Kept on window so a live update keeps the log history.
+ var logs=window.ZoiObserverLogs||(window.ZoiObserverLogs=[]);
  var status='Start를 누르면 현재 가구를 자동 관리합니다.', errors=0, lastGame=null;
  var caps={}, snapshots={}, lastCycle=0, popupRows={}, lastPopup=null, blockedPopup=null;
  var popupTries=0, nextPopupTry=0, checkingPopup=false, watching=false, calendar=null;
  var playedGroups=[], rosterAt=0, rosterMap='';
  var scheduleCancel=null;
+ var receiptSerial=0;
+ var lastPendingPoll=0, queueSampleAt={};
  var pausedUntil=0, firstError=0, pendingResume=true, lastMirror=0, mirrorStopped=false;
  var timerKeys=['nextAutonomy','nextHope','nextCommute','nextTalk','nextPlanning','nextNeed','nextCleaning','nextRepair',
   'nextHopeAction','nextSide','nextOuting','nextHousePlan','nextFurnish','nextPhone','nextPhoneAction',
@@ -32,17 +37,23 @@
   state.background=state.background!==false;
  }
  init();
- var life=ObserverLifeActions.create({cli:cli,write:write,log:log,state:state,
+ var gameData=ObserverGameData.create(cli);
+ var life=ObserverLifeActions.create({cli:cli,write:write,log:log,state:state,gameData:gameData,
+  markAccepted:function(){receiptSerial++;},
   game:function(){return lastGame;},members:function(){return members;},snapshot:function(id){return snapshots[id];},
+  queued:function(id){var s=snapshots[String(id)];return s&&s.queue&&s.queue.items||[];},
   active:function(token){return state.enabled&&token===epoch;}});
  var panels=ObserverPanels.create({cli:cli,write:write,log:log,state:state,game:function(){return lastGame;},
   background:function(){return state.background;},
   active:function(token){return state.enabled&&token===epoch;}});
  var travel=ObserverTravel.create({cli:cli,write:write,log:log,state:state,game:function(){return lastGame;},
   active:function(token){return state.enabled&&token===epoch;}},L,P);
+ var care=ChildCare.create({cli:cli,write:write,log:log,move:life.move,state:state,game:function(){return lastGame;},
+  active:function(token){return state.enabled&&token===epoch;}},L);
  wf.content.innerHTML='<div class="summary"><b>가구 관찰 실험판 '+VERSION+'</b><p id="status"></p></div>'+
   '<div class="buttons"><button id="start">Start</button><button id="played">Played</button><button id="stop">Stop</button><button id="report">Report</button></div>'+
   '<p class="help">Start: 현재 가구 / Played: 플레이한 가구들 / Stop: 중지 / Report: 진단 저장</p>'+
+  '<p class="help" id="data-status"></p><p class="help">창 복구 Ctrl+Shift+O</p>'+
   '<p class="help"><button id="background" aria-pressed="true"></button><span id="mode-note"></span></p>'+
   '<div id="people"></div><p id="news"></p><p class="limit">욕구·수리·택배·소망 / 소식·일정 / 취향·관계</p>'+
   '<div id="log"></div>';
@@ -54,13 +65,17 @@
  function esc(x){return String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
  function render(){
   document.getElementById('status').textContent=(state.enabled?'[자동 관리] ':'[관찰 대기] ')+status;
+  var data=gameData.summary();
+  document.getElementById('data-status').textContent=data.tableCount?
+   '게임 데이터 · '+data.tableCount+'개 표 / 읽은 행 '+Object.values(data.queried).reduce(function(n,x){return n+x;},0)+'개':
+   '게임 데이터 목록 확인 대기';
   var toggle=document.getElementById('background');
   toggle.textContent='다른 작업 모드 '+(state.background?'켜짐':'꺼짐');
   toggle.setAttribute('aria-pressed',String(state.background));
   document.getElementById('mode-note').textContent=state.background?'마우스 입력이 필요한 작업은 대기':'게임 화면 입력 허용';
   document.getElementById('people').innerHTML=members.map(function(m){
    var id=String(m.entity_id), s=snapshots[id], p=state.people[id]||{};
-   var html='<div class="person"><b>'+esc(m.last_name+' '+m.first_name)+'</b><span> '+esc(m.job_name||'무직')+'</span>';
+   var html='<div class="person"><b>'+esc(m.last_name+' '+m.first_name)+'</b><span> '+esc(ChildCare.dependent(m)?m.age_group_text||'영유아':m.job_name||'무직')+'</span>';
    if(state.scope==='played')html+='<p>가구: '+esc(m.observer_household_name||m.household_id)+'</p>';
    if(s){
     html+='<p>기질: '+esc(P.traits(s.trait||{}).join(', ')||'읽는 중')+'</p>';
@@ -70,8 +85,10 @@
     html+='<p>상태: '+esc(s.note||'관찰 중')+'</p>';
    }
    var now=p.lastMinute, view=A.summary(p,now);
-   if(view&&view.intent)html+='<p class="intent">지금: '+esc(view.intent.label)+(view.intent.why?' · '+esc(view.intent.why):'')+
+   if(view&&view.intent)html+='<p class="intent">최근 '+(view.intent.status==='verified'?'반영 확인':'실행 요청')+': '+esc(view.intent.label)+(view.intent.why?' · '+esc(view.intent.why):'')+
     ' <span class="help">('+esc(clock(view.intent.minute))+')</span></p>';
+   if(view&&view.waiting.length)html+='<p class="help">대기: '+esc(view.waiting.map(function(task){return task.label+' · '+task.reason;}).join(' / '))+'</p>';
+   if(p.lastAction)html+='<p class="help">행동 결과: '+esc(p.lastAction.note||'게임 대기열 확인 중')+'</p>';
    if(p.goal){
     var gm=p.goal.kind==='ambition'?null:(p.goalPlans||[]).find(function(g){return g.name===p.goal.name&&g.instance===p.goal.instance;});
     html+='<p>추구 중인 '+(p.goal.kind==='ambition'?'야망':'소망')+': '+esc(p.goal.name)+'</p>';
@@ -79,6 +96,7 @@
     if(ft)html+='<p class="help">'+esc(ft)+'</p>';
    }
    if(p.goalBlock)html+='<p>막힘: '+esc(p.goalBlock)+'</p>';
+   if(ChildCare.dependent(m)&&p.childCare&&p.childCare.status)html+='<p>돌봄: '+esc(p.childCare.status)+'</p>';
    if(p.upcoming&&p.upcoming.length)html+='<p class="help">다음 차례: '+esc(p.upcoming.join(' → '))+'</p>';
    if(view&&view.starved.length)html+='<p class="urgent">오래 밀린 작업: '+esc(view.starved.map(function(k){
     return (p.agenda.tasks[k]&&p.agenda.tasks[k].label)||k;}).join(', '))+'</p>';
@@ -106,13 +124,13 @@
     var plan=p.lifePlan;
     html+='<p>진로 판단: '+esc(plan.primary)+'</p>';
     if(plan.side)html+='<p>부수입 후보: '+esc(plan.side.label)+'</p>';
-    if(plan.business)html+='<p>사업 후보(판단만): '+esc(plan.business.type)+' ('+plan.business.score+'점)</p>';
+    if(plan.business&&!plan.ownedBusiness)html+='<p>창업: '+esc(plan.business.type)+' 후보 · 사업 등록 실행 경로 미확인</p>';
     if(plan.ownedBusiness)html+='<p>보유 사업: '+(plan.ownedBusiness.operating?'영업 중':'영업 대기')+'</p>';
    }
    if(p.housePlan){
     if(p.housePlan.missing.length)html+='<p>필요 가구: '+esc(p.housePlan.missing.map(function(x){return x.label+' '+x.price;}).join(', '))+'</p>';
-    if(p.housePlan.cramped)html+='<p>이사 후보(판단만): '+esc(p.housePlan.move?p.housePlan.move.name:'조건에 맞는 주택 없음')+'</p>';
-    if(p.housePlan.adoption)html+='<p>입양 후보(판단만, 자동 실행 안 함): '+esc(p.housePlan.adoption)+'</p>';
+    if(p.housePlan.cramped)html+='<p>이사: '+esc(p.housePlan.moveStatus||'기존 가구 실행 경로 확인 필요')+'</p>';
+    if(p.housePlan.adoption)html+='<p>입양: '+esc(p.housePlan.adoption)+'</p>';
    }
    if(p.skillGoal)html+='<p>연습 목표: '+esc(p.skillGoal)+'</p>';
    if(p.preferences)html+='<p>취향 '+Object.keys(p.preferences.saved).length+'개 / 대기 '+p.preferences.pending.length+'개</p>';
@@ -138,7 +156,7 @@
   if(!h||h.id!==name)throw Error('기능 정보 확인 실패: '+name);
   caps[name]=h;return h;
  }
- async function table(id){if(!rows[id])rows[id]=await cli('data.table_get',{Alias:'Career',Row:id});return rows[id];}
+ async function table(id){if(!rows[id])rows[id]=await gameData.row('Career',id);return rows[id];}
  async function roster(household,mapId){
   if(state.scope!=='played')return household.members;
   if(rosterMap!==mapId||Date.now()-rosterAt>30000){
@@ -243,10 +261,79 @@
   var h=await capability(name);
   if(h.access!=='Public'&&extended.indexOf(name)<0)throw Error('등록되지 않은 명령: '+name);
   if(!await writable(token,args.entity_id||args.character_id,popup,selectedId))throw Error('상태 변경으로 자동 명령 보류');
-  return cli(name,args);
+  var result=await cli(name,args);
+  // 0.4.7: keep the game's answer to recent action requests in the report, to see why an action did not start.
+  if(name==='interaction.execute'){
+   receiptSerial++;
+   var id=String(args.entity_id||lastGame.possessed_entity_id);
+   var decision=state.people[id]||(state.people[id]={});
+   decision.lastAction={bag:args.interaction_bag_id,target:args.target_entity_id||null,at:Date.now(),
+    minute:decision.lastMinute,status:'requested'};
+   var trail=state.execTrail||(state.execTrail=[]);
+   var text;try{text=JSON.stringify(result);}catch(_){text=String(result);}
+   trail.push({at:new Date().toISOString(),bag:args.interaction_bag_id,target:args.target_entity_id||null,result:String(text).slice(0,240)});
+   if(trail.length>12)trail.shift();
+  }
+  if(name==='career.join')receiptSerial++;
+  return result;
+ }
+ function observeAction(decision,queue,minute){
+  var action=decision.lastAction;
+  if(!action||action.status==='ended')return;
+  var observed=R.actionState(queue,action);
+  if(observed==='playing'){
+   action.status='started';action.note='실제 행동 시작 확인';
+  }else if(action.status==='started'){
+   action.status='ended';action.note='행동 종료 관찰 · 목표 결과는 별도 확인';
+  }else if(observed==='queued'){
+   action.status='queued';action.note='같은 행동과 대상이 대기열에 있음';
+  }else if(observed!=='unknown'&&!R.awaitingStart(Date.now(),minute,action.at,action.minute)){
+   action.status='unconfirmed';action.note='행동 시작 미확인';
+  }
+ }
+ async function readQueue(id){
+  var queue=await cli('interaction.get_queue',{entity_id:id});
+  queue.entries=queue.queue_count>0?null:[];
+  if(queue.queue_count>0){
+   try{
+    var ic=await cli('entity.reflect',{entity_id:id,Component:'Interaction'}), list=ic.interactionQueue;
+    if(Array.isArray(list)){
+     queue.entries=R.queueEntries(list,id);
+     if(list.length&&!state.queueSample)state.queueSample=JSON.stringify(list[0]).slice(0,400);
+    }
+   }catch(_){}
+  }
+  queue.items=(queue.entries||[]).map(function(entry){return entry.bag;});
+  queueSampleAt[id]=Date.now();
+  return queue;
+ }
+ async function watchPending(game,token){
+  var now=Date.now();
+  if(!state.enabled||token!==epoch||now-lastPendingPoll<3000)return;
+  if(state.scope!=='played'&&!members.some(function(m){return String(m.entity_id)===String(game.possessed_entity_id);}))return;
+  var oldest=Infinity, member=null;
+  members.forEach(function(m){
+   var id=String(m.entity_id), decision=state.people[id], sampled=queueSampleAt[id]||0;
+   if(!decision||sampled>=oldest||now-sampled<2500)return;
+   var action=decision.lastAction;
+   if(decision.goal||action&&action.status!=='ended'&&now-action.at<120000){oldest=sampled;member=m;}
+  });
+  if(!member)return;
+  lastPendingPoll=now;
+  var id=String(member.entity_id), decision=state.people[id];
+  var minute=gameMinute(await cli('environment.get_time'));
+  if(!Number.isFinite(minute)||decision.lastMinute>minute||!state.enabled||token!==epoch)return;
+  var queue=await readQueue(id);
+  if(!state.enabled||token!==epoch)return;
+  observeAction(decision,queue,minute);
+  if(snapshots[id]){
+   snapshots[id].queue=queue;
+   snapshots[id].queue_sampled_at=new Date().toISOString();
+  }
+  await life.reviewGoal(member,decision,{queue:queue},minute);
  }
  async function report(manual){
-  var payload={daily:state.daily||{},lastReturn:state.lastReturn||null,version:VERSION,created:new Date().toISOString(),enabled:state.enabled,scope:state.scope,background:state.background,household:state.household,status:status,game:lastGame,popup:blockedPopup,travel:state.travel,awayTravel:state.awayTravel,news:panels.latestNews(),members:members,snapshots:snapshots,decisions:state.people,capabilities:caps,logs:logs,last_cycle:lastCycle};
+  var payload={gameData:gameData.summary(),queueSample:state.queueSample||null,execTrail:state.execTrail||[],daily:state.daily||{},lastReturn:state.lastReturn||null,version:VERSION,created:new Date().toISOString(),enabled:state.enabled,scope:state.scope,background:state.background,household:state.household,status:status,game:lastGame,popup:blockedPopup,travel:state.travel,awayTravel:state.awayTravel,news:panels.latestNews(),members:members,snapshots:snapshots,decisions:state.people,capabilities:caps,logs:logs,last_cycle:lastCycle};
   await cli('uimod.cfg_save',{mod_id:wf.MOD_ID,section:'ui/'+wf.APP_NAME+'/saved',key:manual?'observer-report':'observer-auto',value:JSON.stringify(payload)});
   lastReport=Date.now();return payload;
  }
@@ -262,7 +349,12 @@
    blockedPopup=popups;
    if(!state.enabled||token!==epoch||popups.length!==1)return;
    var popup=popups[0], id=popup.popup_id, actor=String(game.possessed_entity_id);
-   if(!members.some(function(m){return String(m.entity_id)===actor;}))return;
+   // 0.4.7: menu, save/load and quit dialogs belong to the player. In game the mod cancelled a quit request twice.
+   if(/^(?:GameMenu_|Data(?:Saved|Loaded|Save|Load)|Save|Load|Quit|Exit|Option|Setting|Title|Lobby|System_)/i.test(String(id||'')))return;
+   // Purchase confirmations belong to the flow that opened them (냥스토어 confirms its own; a player's purchase is the player's).
+   if(/^(?:CatShopBuy|.*Buy$|.*Purchase.*)/i.test(String(id||'')))return;
+   var member=members.find(function(m){return String(m.entity_id)===actor;});
+   if(!member||id==='RabbitHole_Go'&&ChildCare.dependent(member))return;
    var key=String(id)+':'+popup.desc;
    if(lastPopup!==key){lastPopup=key;popupTries=0;nextPopupTry=0;}
    if(popupTries>=2||Date.now()<nextPopupTry)return;
@@ -321,6 +413,8 @@
   var match=routing.match(/\bScheduleId:\s*(\d+)/);
   if(!match)return;
   var work=/bIsWorkingSchedule:\s*true/i.test(routing);
+  var scheduledMember=members.find(function(m){return String(m.entity_id)===actor;});
+  if(ChildCare.dependent(scheduledMember)||scheduledMember&&care.reserved(scheduledMember,members))return;
   var leisure=/TimelineName:\s*DefaultLeisureTimeline\b/.test(routing);
   var p=state.people[actor]||(state.people[actor]={});
   var minute=time.day*1440+time.hour*60+time.minute;
@@ -361,6 +455,7 @@
   }catch(e){log(member.first_name+': 소망 생성 보류 - '+e.message);}
  }
  async function commute(member,decision,minute,token,snapshot){
+  if(!ChildCare.workAge(member,L))return;
   var work=snapshot.work;
   if(work.is_at_work){
    if(decision.commutePending){log(member.first_name+': 직장 도착 확인');decision.commutePending=false;}
@@ -465,7 +560,7 @@
  }
  async function talk(member,character,decision,minute,token,snapshot,onlyGoal){
   if(!onlyGoal&&minute<(decision.nextTalk||0)||snapshot.work.is_at_work||snapshot.work.is_working_time||snapshot.work.is_commute_time)return false;
-  if(!L.relaxed(snapshot.queue))return false;
+  if(!L.goalReady(snapshot.queue,snapshot.work))return false;
   var stats=snapshot.stats.stats;
   if(['Hunger','Sleep','Toilet'].some(function(key){return stats[key]&&stats[key].pct<20;}))return false;
   var traits=P.traits(snapshot.trait);
@@ -530,6 +625,9 @@
     log(member.first_name+'의 대화 요청: '+decision.lastTalk);
     return true;
    }
+   // Nobody suitable around while lonely: go where people are.
+   if(!onlyGoal&&stats.Society&&stats.Society.pct<=35)
+    return await life.socialOuting(member,character,decision,snapshot,{hour:Math.floor(minute%1440/60)},minute,token);
   }catch(e){log(member.first_name+': 대화 요청 보류 - '+e.message);}
   return false;
  }
@@ -539,13 +637,14 @@
   if(p.lastMinute>minute){
    resetTimers(p,0);
    p.lastCareerMinute=undefined;p.idleSince=undefined;p.commutePending=false;
-   p.goal=null;p.outing=null;p.scheduleChoice=null;
+   p.goal=null;p.outing=null;p.scheduleChoice=null;p.lastAction=null;p.furnitureRetries={};
   }
   p.lastMinute=minute;
   var character=await cli('entity.reflect',args);
   var auto=personalAutonomy(character);
   var sameCity=character.locatedCityName===lastGame.map_id;
-  if(state.enabled&&sameCity&&auto.value===false&&String(lastGame.possessed_entity_id)===id&&minute>=(p.nextAutonomy||0)){
+  var dependent=ChildCare.dependent(m), ghost=ChildCare.ghost(character);
+  if(state.enabled&&sameCity&&!dependent&&!ghost&&auto.value===false&&String(lastGame.possessed_entity_id)===id&&minute>=(p.nextAutonomy||0)){
    p.nextAutonomy=minute+120;
    try {
     character=await enablePersonal(id,character,token);
@@ -554,7 +653,20 @@
     else log(m.first_name+': 개인 설정 켜기 결과 미확인');
    }catch(e){log(m.first_name+': 자율 행동 설정 보류 - '+e.message);}
   }
-  var stats=await cli('stat.get_all',args),queue=await cli('interaction.get_queue',args),hope=await cli('hope.list',args),work=await cli('career.get_work_status',args);
+  var stats=await cli('stat.get_all',args),queue=await readQueue(id);
+  if(dependent||ghost){
+   observeAction(p,queue,minute);
+   var note=ghost?'유령 상태 · 생활 자동 명령 대기':m.has_career?'영유아 직업 기록 감지 · 자동 취업·출근 차단':'영유아 · 나이에 맞는 돌봄 관찰';
+   p.goalBlock=null;
+   p.commutePending=false;
+   if(cache[id]!==note){cache[id]=note;log(m.first_name+': '+note);}
+   snapshots[id]={sampled_at:new Date().toISOString(),stats:stats,queue:queue,hope:{selected_count:0,selected:[]},
+    work:{},autonomy:auto,trait:{},note:note};
+   if(!ghost&&state.enabled&&token===epoch&&sameCity)await care.run(m,members,minute,token,{character:character,stats:stats,queue:queue});
+   return;
+  }
+  var hope=await cli('hope.list',args),work=await cli('career.get_work_status',args);
+  observeAction(p,queue,minute);
   if(!stats.stats||!Array.isArray(hope.selected))throw Error('욕구 또는 소망 응답 형식 변경');
   if(!profiles[id]||profiles[id].day!==time.day||minute<profiles[id].minute||minute-profiles[id].minute>=60){
    profiles[id]={day:time.day,minute:minute,trait:await cli('entity.reflect',{entity_id:id,Component:'Trait'}),skills:await cli('skill.get_all',args)};
@@ -568,21 +680,34 @@
   p.goalBlock=sleeping?'수면 중':work.is_working_time||work.is_at_work||work.is_commute_time?'근무 또는 출근 중':
    !L.relaxed(queue)?'현재 행동이 끝나기를 기다리는 중':null;
   if(!playing&&queue.is_empty){if(p.idleSince===undefined)p.idleSince=minute;if(minute-p.idleSince>=120)note='2시간 이상 행동 없음: 길막힘/가구 배치 확인 필요';}else p.idleSince=undefined;
-  if(work.is_working_day&&work.is_working_time&&!work.is_at_work)note='근무 시간에 직장 밖: 출근 여부 확인 필요';
+  // In game the Zoi went to work (career exp 106 → 111) while is_at_work stayed false on the way and in the work rabbit hole.
+  if(work.is_working_day&&work.is_working_time&&!work.is_at_work)
+   note=p.commutePending?'출근 요청 완료 · 직장 이동 또는 근무 중':'근무 시간에 직장 밖: 출근 여부 확인 필요';
   if(sleeping)note='수면 중 · 깨어난 뒤 미처리 행동 재평가';
   snapshots[id]={sampled_at:new Date().toISOString(),stats:stats,queue:queue,hope:hope,work:work,autonomy:auto,trait:profile.trait,note:note};
   if(cache[id]!==note){cache[id]=note;log(m.first_name+': '+note);}
   if(!state.enabled||token!==epoch||!sameCity)return;
+  try{await life.reviewGoal(m,p,snapshots[id],minute);}
+  catch(e){log(m.first_name+': 목표 결과 확인 보류 - '+e.message);}
   if(sleeping){p.wasSleeping=true;return;}
   if(p.wasSleeping){
    p.wasSleeping=false;
-   p.nextNeed=p.nextHopeAction=p.nextTalk=p.nextCommute=p.nextRepair=p.nextParcel=p.nextPhoneAction=minute;
+   p.nextNeed=p.nextHopeAction=p.nextAmbitionAction=p.nextTalk=p.nextCommute=p.nextRepair=p.nextParcel=p.nextPhoneAction=minute;
    log(m.first_name+': 기상 확인. 대기 중인 행동을 다시 확인합니다.');
   }
-  try{
-   await life.reviewGoal(m,p,snapshots[id],minute);
-   if(await life.needs(m,character,p,snapshots[id],minute,token))return;
-  }catch(e){log(m.first_name+': 생활 판단 보류 - '+e.message);}
+  if(ChildCare.workAge(m,L)){
+   for(var child of members){
+    if(!ChildCare.dependent(child)||String(child.household_id)!==String(m.household_id))continue;
+    try{await care.run(child,members,minute,token);}
+    catch(e){
+     var careKey='care:'+child.entity_id;
+     if(cache[careKey]!==e.message){cache[careKey]=e.message;log(child.first_name+': 돌봄 확인 보류 / '+e.message);}
+    }
+   }
+   if(care.reserved(m,members))return;
+  }
+  try{if(await life.needs(m,character,p,snapshots[id],minute,token))return;}
+  catch(e){log(m.first_name+': 필수 욕구 처리 보류 - '+e.message);}
   if(work.is_working_time||work.is_commute_time||work.is_at_work){
    await commute(m,p,minute,token,snapshots[id]);
    return;
@@ -590,7 +715,10 @@
   async function attempt(label,run){
    var key=id+':'+label;
    try{var value=await run();delete cache[key];return value;}
-   catch(e){if(cache[key]!==e.message){cache[key]=e.message;log(m.first_name+': '+label+' 보류 / '+e.message);}}
+   catch(e){
+    if(cache[key]!==e.message){cache[key]=e.message;log(m.first_name+': '+label+' 보류 / '+e.message);}
+    return A.result('failed',e.message,minute+20);
+   }
   }
   if(p.talkRequest){
    var heard=queue.current&&String(queue.current.target_entity_id)===p.talkRequest.target&&queue.current.interaction_bag_id===p.talkRequest.bag;
@@ -602,13 +730,13 @@
   await attempt('야망 단계',function(){return life.prepareAmbition(m,p,minute);});
   await attempt('소망 생성',function(){return generateHopes(m,p,minute,token,snapshots[id]);});
   await attempt('소망 조건',function(){return life.prepareGoals(m,p,minute,snapshots[id].hope.selected);});
-  if(minute>=(p.nextPlanning||0)){
+  if(ChildCare.workAge(m,L)&&minute>=(p.nextPlanning||0)){
    p.nextPlanning=minute+90;
    await attempt('진로 판단',function(){return life.occupation(m,character,p,snapshots[id],profile.skills.skills||[],minute);});
    await attempt('주거 판단',function(){return life.householdPlan(m,character,p,p.lifePlan,minute);});
   }
   var plans=p.goalPlans||[];
-  var deadlines=plans.map(function(plan){return plan.expire_ticks>0?plan.expire_ticks/600000000:NaN;}).filter(Number.isFinite);
+  var deadlines=plans.map(function(plan){return plan.expire_ticks>0?plan.expire_ticks/600000000:NaN;}).filter(function(expiry){return expiry>minute;});
   var dueAt=deadlines.length?Math.min.apply(null,deadlines):NaN;
   var due=Number.isFinite(dueAt)&&dueAt-minute<=120;
   var checkIn=plans.some(function(g){return g.status==='실제 숙소 체크인 필요';});
@@ -619,12 +747,14 @@
   var lowNeeds=['Hunger','Sleep','Toilet'].some(function(k){return needs[k]&&needs[k].pct<40;});
   var lonely=needs.Society&&needs.Society.pct<45;
   var skills=profile.skills.skills||[];
+  var routine=L.routineNeed(needs);
+  var urgent=['Toilet','Hunger','Sleep','Cleanliness'].some(function(k){return C.catDonut(k,needs[k]);});
   var tasks=[
    {key:'outingProgress',label:'외출 진행·귀가',base:95,duringGoal:true,eligible:!!p.outing,
     run:function(){return life.outing(m,character,p,snapshots[id],time,minute,token);}},
    {key:'phone',label:'휴대폰 확인·답장',base:45,duringGoal:true,bonus:(p.pendingReplies?15:0)+(p.phone&&p.phone.unread?5:0),
     run:function(){return attempt('휴대폰',function(){return panels.phone(m,p,snapshots[id],minute,token);});}},
-   {key:'catShop',label:'냥스토어',base:10,duringGoal:true,
+   {key:'catShop',label:'냥스토어 긴급 도넛',base:90,duringGoal:true,eligible:urgent,
     run:function(){return attempt('냥스토어',function(){return panels.catShop(m,p,snapshots[id],minute,token);});}},
    {key:'home',label:'집 수리·청소 서비스',base:40,duringGoal:true,run:async function(){
     try{
@@ -635,36 +765,42 @@
     }catch(e){if(cache[id+':home']!==e.message){cache[id+':home']=e.message;log(m.first_name+': 집 관리 보류 / '+e.message);}}
     return false;
    }},
-   {key:'preference',label:'취향 정리',base:5,duringGoal:true,run:async function(){
-    await attempt('취향',function(){return panels.preference(m,snapshots[id],skills,p,minute,token);});return false;
-   }},
+   {key:'preference',label:'취향 정리',base:5,duringGoal:true,
+    run:function(){return attempt('취향',function(){return panels.preference(m,snapshots[id],skills,p,minute,token);});}},
+   {key:'routine',label:'일상 욕구 관리',base:33,duringGoal:true,eligible:!!routine,
+    run:function(){return attempt('일상 욕구',function(){return life.routine(m,character,p,snapshots[id],minute,token);});}},
    {key:'vacation',label:'휴가',base:25,long:true,eligible:(!due||checkIn)&&!p.goal,run:function(){
     return attempt('휴가',function(){
      return life.vacation(m,character,p,snapshots[id],time,minute,token,calendar&&calendar.seasonLength,
       function(){return travel.start(m,p,snapshots[id],time,token);});
     });
    }},
-   {key:'hope',label:'소망 추구',base:50,deadline:dueAt,why:due?'만료가 가까운 소망':null,
+   {key:'hope',label:'소망 추구',base:50,eligible:plans.length>0,deadline:dueAt,why:due?'만료가 가까운 소망':null,
     run:function(){return attempt('소망',function(){return life.pursueHope(m,character,p,snapshots[id],time,minute,token,handleTalk);});}},
-   {key:'ambition',label:'야망 단계',base:42,
+   {key:'ambition',label:'야망 단계',base:42,eligible:!!(p.ambition&&p.ambition.plans.length),
     run:function(){return attempt('야망',function(){return life.pursueAmbition(m,character,p,snapshots[id],time,minute,token,handleTalk);});}},
-   {key:'parcels',label:'택배 개봉',base:30,run:function(){return attempt('택배',function(){return life.parcels(m,character,p,snapshots[id],minute,token);});}},
-   {key:'furnish',label:'필요 물건 마련',base:20,long:true,
+   {key:'parcels',label:'택배 개봉',base:30,duringGoal:true,run:function(){return attempt('택배',function(){return life.parcels(m,character,p,snapshots[id],minute,token);});}},
+   {key:'furnish',label:'필요 물건 마련',base:20,long:true,bonus:p.housePlan&&p.housePlan.missing.length?35:0,
     run:function(){return attempt('가구',function(){return life.furnish(m,character,p,p.lifePlan,snapshots[id],skills,minute,token);});}},
-   {key:'event',label:'소식함 행사',base:32,long:true,deadline:eventEnd,
+   {key:'event',label:'소식함 행사',base:32,long:true,eligible:!!(p.outing&&p.outing.event||news&&news.events&&news.events.length),deadline:eventEnd,
     run:function(){return attempt('행사',function(){return life.attend(m,character,p,snapshots[id],time,minute,token,news);});}},
-   {key:'clean',label:'집 청소',base:30,run:function(){return attempt('청소',function(){return life.clean(m,character,p,snapshots[id],minute,token);});}},
-   {key:'side',label:'생활비 보충',base:p.lifePlan&&p.lifePlan.short?55:5,
+   {key:'clean',label:'집 청소',base:30,duringGoal:true,run:function(){return attempt('청소',function(){return life.clean(m,character,p,snapshots[id],minute,token);});}},
+   {key:'side',label:'생활비 보충',base:55,eligible:!!(p.lifePlan&&p.lifePlan.short),
     run:function(){return attempt('부수입',function(){return life.sideIncome(m,character,p,p.lifePlan,snapshots[id],skills,minute,token);});}},
    {key:'outing',label:'여가 외출',base:15,long:true,eligible:!p.outing,
     run:function(){return attempt('외출',function(){return life.outing(m,character,p,snapshots[id],time,minute,token);});}},
-   {key:'social',label:'대화·관계',base:28,bonus:lonely?20:0,run:function(){return talk(m,character,p,minute,token,snapshots[id]);}},
-   {key:'career',label:'진로 검토',base:8,run:function(){return attempt('진로',function(){return career(m,p,time,minute,token,profile,work,queue);});}}
+   {key:'social',label:'대화·관계',base:28,bonus:needs.Society&&needs.Society.pct<25?40:lonely?20:0,run:function(){return talk(m,character,p,minute,token,snapshots[id]);}},
+   {key:'career',label:'구직·이직',base:m.has_career?8:38,eligible:ChildCare.mayJoin(m,L),
+    run:function(){return attempt('진로',function(){return career(m,p,time,minute,token,profile,work,queue);});}}
   ];
   var context={late:time.hour>=19,lowNeeds:lowNeeds};
   var ranked=A.order(p,tasks,minute,context);
   p.upcoming=ranked.slice(0,3).map(function(r){return r.task.label;});
-  var acted=await A.run(p,tasks,minute,context,{skip:function(task){
+  var turnStart=Date.now();
+  await A.run(p,tasks,minute,context,{
+   receipt:function(){return receiptSerial;},
+   moved:function(){return (state.lastMoveAt||0)>=turnStart;},
+   skip:function(task){
    return !state.enabled||token!==epoch||(!!p.goal&&!task.duringGoal);
   }});
   A.compact(p);
@@ -686,8 +822,7 @@
  async function career(m,p,time,minute,token,profile,work,queue){
   var id=String(m.entity_id);
   if(!L.relaxed(queue)||!state.enabled||token!==epoch)return false;
-  if(!m.has_career&&m.employable!==true)return false;
-  if(m.has_career&&!/^(Youth|YoungAdult|Adult|Old|Elder)$/.test(m.age_group||''))return false;
+  if(!ChildCare.mayJoin(m,L))return false;
   if(work.is_working_time||work.is_commute_time||work.is_at_work)return false;
   if(p.lastCareerMinute!==undefined&&minute-p.lastCareerMinute<360)return false;
   p.lastCareerMinute=minute;
@@ -697,12 +832,17 @@
   var list=await cli('career.list_openings');if(!Array.isArray(list.openings))throw Error('구인 응답 형식 변경');
   var available=list.openings.filter(function(o){return o.vacancy>0&&(!slot||o.job_id!==slot.jobDtId);});
   p.openings=Array.from(new Set(list.openings.filter(function(o){return o.vacancy>0;}).map(function(o){return o.job_name||o.job_id;})));
-  if(p.lifePlan&&p.lifePlan.primary==='사업 우선')return false;
+  if(p.lifePlan&&p.lifePlan.primary==='사업 우선')return A.result('waiting','현재 운영 중인 사업 수익 확인',minute+360);
+  if(!available.length){p.target=null;return A.result('waiting','게임의 실제 채용 공석 없음',minute+360);}
   // Limit table fetches per evaluation to avoid flooding the game on large worlds.
   available=available.slice(0,60);
   for(var i=0;i<available.length;i++)await table(available[i].career_dt_id);
+  available=available.filter(function(opening){
+   var organization=(rows[opening.career_dt_id].organizations||[]).find(function(o){return o.jobId===opening.job_id;});
+   return ObserverGameData.careerAgeAllowed(organization,m.age_group);
+  });
   var best=P.pick(available,profile.trait,profile.skills.skills||[],rows,id);
-  if(!best){p.target=null;return false;}
+  if(!best){p.target=null;return A.result('waiting','현재 나이·조건에 맞는 채용 공석 없음',minute+360);}
   p.target={name:best.opening.job_name,id:best.opening.job_id,score:best.fit.score,reasons:best.fit.reasons};
   if(slot){
    var fit=P.score(profile.trait,profile.skills.skills||[],await table(key),key);
@@ -712,7 +852,9 @@
   // Re-read availability and membership immediately before the write.
   var fresh=await cli('household.get_members',{household_id:String(m.household_id)});
   var member=(fresh.members||[]).filter(function(x){return String(x.entity_id)===id;})[0];
-  if(!member||String(fresh.household_id)!==String(m.household_id)||member.has_career!==m.has_career)return false;
+  if(!member||!ChildCare.mayJoin(member,L)||String(fresh.household_id)!==String(m.household_id)||member.has_career!==m.has_career)return false;
+  var careerNow=await cli('entity.reflect',{entity_id:id,Component:'Career'}), slotNow=careerNow.careerSlots&&careerNow.careerSlots.business;
+  if(!!slot!==!!slotNow||slot&&(slot.jobDtId!==slotNow.jobDtId||slot.careerDtId!==slotNow.careerDtId))return false;
   var latest=await cli('career.list_openings');
   if(!(latest.openings||[]).some(function(o){return o.job_id===best.opening.job_id&&o.career_entity_id===best.opening.career_entity_id&&o.vacancy>0;}))return false;
   log(m.first_name+': '+(slot?'이직':'취업')+' 선택 - '+best.opening.job_name+' ('+(best.fit.reasons.join(', ')||'현재 가능한 일자리')+')');
@@ -721,7 +863,7 @@
   if(!next||next.jobDtId!==best.opening.job_id)throw Error('취업/이직 결과 미확인. 기존 직장을 별도로 그만두게 하지 않았습니다.');
   p.currentCareer=next.careerDtId;p.careerSince=time.day;
   log(m.first_name+': '+best.opening.job_name+' 변경 확인');
-  return true;
+  return A.result('verified',best.opening.job_name+' 직업 반영');
  }
  function returned(trip,time){
   var minute=gameMinute(time);
@@ -755,6 +897,7 @@
    lastGame=await cli('game.get_state');
    // City transitions and loading screens are not errors; they must never stop the observer.
    if(lastGame.phase!=='in_game'||lastGame.loading){status='게임 로딩/생활 진입 대기';errors=0;firstError=0;return;}
+   await gameData.catalog();
    var time=await cli('environment.get_time');
    if(state.enabled&&state.travel){
     try{
@@ -788,9 +931,13 @@
    if(state.awayTravel&&lastGame.map_id===state.awayTravel.origin)returned(state.awayTravel,time);
    var traveling=awayHousehold(household,lastGame);
    if(state.enabled&&traveling)await travel.observeStay(state.awayTravel,time.day*1440+time.hour*60+time.minute);
-   if(state.enabled&&state.scope!=='played'&&!traveling&&String(household.household_id)!==String(state.household)){status='다른 가구를 보고 있습니다. 원래 가구로 돌아가면 재개합니다.';return;}
+   if(state.enabled&&state.scope!=='played'&&!traveling&&String(household.household_id)!==String(state.household)){
+    status='관리 대상과 다른 가구입니다. 현재 가구를 관리하려면 Start를 눌러 주세요.';
+    lastCycle=Date.now();
+    if(Date.now()-lastReport>60000)await report();
+    return;
+   }
    members=await roster(household,lastGame.map_id);
-   await capability('career.join');
    await answerPopup(token,lastGame);
    var sim=await cli('environment.get_simulation');
    if(sim.is_paused){
@@ -856,6 +1003,7 @@
     var answered=await panels.answerCall(game.possessed_entity_id,token);
     if(!answered&&!busy&&game.blocking&&game.blocking.primary_kind==='modal_ui')await panels.relationshipChoice(game.possessed_entity_id,token);
    }
+   await watchPending(game,token);
   }catch(_){}
   finally{watching=false;}
  }
@@ -879,6 +1027,7 @@
    p.nextTaste=p.nextPhoneAction=p.nextMarket=0;
   });
   log(state.background?'다른 작업 모드 켜짐. 게임 내부 동작으로 처리합니다.':'다른 작업 모드 꺼짐. 대기 중인 화면 작업을 다시 확인합니다.');
+  if(state.enabled)saveMirror(true);
  };
  document.getElementById('stop').onclick=function(){
   mirrorStopped=true;pendingResume=false;
@@ -889,11 +1038,18 @@
  window._onStateLoaded=function(){
   epoch++;init();profiles={};snapshots={};cache={};index=0;calendar=null;lastGame=null;rosterAt=0;
   members=[];playedGroups=[];rosterMap='';
+  lastPendingPoll=0;queueSampleAt={};
   lastPopup=null;blockedPopup=null;popupTries=0;nextPopupTry=0;scheduleCancel=null;
-  life.reset();panels.reset();
+  life.reset();panels.reset();care.reset();
   pendingResume=true;pausedUntil=0;errors=0;firstError=0;
   log('저장된 관찰 설정을 불러왔습니다. 목표와 현재 게임 상태를 다시 확인합니다.');
  };
  log(VERSION+' 준비. 다른 작업 모드와 행동 결과를 확인합니다.');
- render();setInterval(cycle,10000);setInterval(watchChoice,1500);setTimeout(cycle,2500);
+ render();
+ // 0.4.7: a running copy can be stopped so new script files load in place (live update, no save/load).
+ var loopTimers=[setInterval(cycle,10000),setInterval(watchChoice,1500)], firstCycle=setTimeout(cycle,2500);
+ window.ZoiObserverShutdown=function(){
+  loopTimers.forEach(clearInterval);clearTimeout(firstCycle);epoch++;
+  log('새 버전 코드로 교체합니다. 자동 관리 상태는 그대로 이어집니다.');
+ };
 })();

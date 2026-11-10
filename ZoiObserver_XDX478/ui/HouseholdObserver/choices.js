@@ -152,8 +152,8 @@
   },[]).sort(function(a,b){return a.end-b.end;});
  }
  function catDonut(need,stat){
-  var options={Sleep:{id:'CatDonut01',limit:8},Hunger:{id:'CatDonut02',limit:12},
-   Toilet:{id:'CatDonut03',limit:10},Cleanliness:{id:'CatDonut05',limit:5}};
+  var options={Sleep:{id:'CatDonut01',limit:10},Hunger:{id:'CatDonut02',limit:12},
+   Toilet:{id:'CatDonut03',limit:10},Cleanliness:{id:'CatDonut05',limit:8}};
   var option=options[need];
   return option&&stat&&Number.isFinite(stat.pct)&&stat.pct<=option.limit?option.id:null;
  }
