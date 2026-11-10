@@ -1,8 +1,8 @@
 (function () {
  'use strict';
- var VERSION='0.6.0', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.6.1', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var A=ObserverAgenda, R=ObserverRecovery, Rel=ObserverRelations, M=ObserverGoalMemory;
- var ChildCare=ObserverChildCare, Score=ObserverScoreboard, CP=ObserverCareerPath, Persona=ObserverPersona, Rot=ObserverRotation, Field=ObserverFieldCheck, Family=ObserverFamily;
+ var ChildCare=ObserverChildCare, Score=ObserverScoreboard, CP=ObserverCareerPath, Persona=ObserverPersona, Rot=ObserverRotation, Field=ObserverFieldCheck, Family=ObserverFamily, Why=ObserverWhy;
  var claims=Family.create(), nowMinute=NaN, popupTrack=null, expectedSelected=null, lastSelected=null;
  var busy=false, epoch=0, index=0, cache={}, profiles={}, rows={}, members=[], lastReport=0;
  // Kept on window so a live update keeps the log history.
@@ -19,6 +19,12 @@
   'nextHopeAction','nextSide','nextOuting','nextHousePlan','nextFurnish','nextPhone','nextPhoneAction',
   'nextTaste','nextParcel','nextMarket','nextCatShop','nextAmbition','nextAmbitionAction','nextVacation','nextGoalFurnish','ambitionTurn'];
  function resetTimers(p,minute){timerKeys.forEach(function(key){p[key]=minute||0;});}
+ // Why this Zoi is not being asked to do anything right now (read-only view of every running wait).
+ function whyContext(m,id){
+  var s=snapshots[id]||{}, q=s.queue||{};
+  return {enabled:state.enabled,dependent:ChildCare.dependent(m),away:!!lastGame&&s.city!==undefined&&s.city!==lastGame.map_id,
+   sleeping:!!s.queue&&L.sleeping(s.queue,s.work),work:s.work,queueCount:q.queue_count||0,current:q.current&&q.current.interaction_bag_id};
+ }
  function clock(minute){
   if(!Number.isFinite(minute))return '';
   var d=Math.floor(minute/1440), h=Math.floor(minute%1440/60), m=Math.floor(minute%60);
@@ -124,6 +130,7 @@
    }
    var tally=Number.isFinite(p.lastMinute)&&Score.line(state,Score.dayOf(p.lastMinute),id);
    if(tally)html+='<p class="intent">'+esc(tally)+'</p>';
+   if(Number.isFinite(p.lastMinute))html+='<p class="help">지금: '+esc(Why.explain(p,p.lastMinute,whyContext(m,id)))+'</p>';
    if(p.goalBlock)html+='<p>막힘: '+esc(p.goalBlock)+'</p>';
    if(ChildCare.dependent(m)&&p.childCare&&p.childCare.status)html+='<p>돌봄: '+esc(p.childCare.status)+'</p>';
    if(p.upcoming&&p.upcoming.length)html+='<p class="help">다음 차례: '+esc(p.upcoming.join(' → '))+'</p>';
@@ -367,7 +374,9 @@
   await life.reviewGoal(member,decision,{queue:queue},minute);
  }
  async function report(manual){
-  var payload={fieldCheck:state.fieldCheck||null,rotation:state.rotation||null,score:Score.report(state),gameData:gameData.summary(),queueSample:state.queueSample||null,execTrail:state.execTrail||[],daily:state.daily||{},lastReturn:state.lastReturn||null,version:VERSION,created:new Date().toISOString(),enabled:state.enabled,scope:state.scope,background:state.background,household:state.household,status:status,game:lastGame,popup:blockedPopup,travel:state.travel,awayTravel:state.awayTravel,news:panels.latestNews(),members:members,snapshots:snapshots,decisions:state.people,capabilities:caps,logs:logs,last_cycle:lastCycle};
+  var why={};
+  members.forEach(function(m){var id=String(m.entity_id), p=state.people[id];if(p&&Number.isFinite(p.lastMinute))why[id]=Why.report(p,p.lastMinute,whyContext(m,id));});
+  var payload={why:why,fieldCheck:state.fieldCheck||null,rotation:state.rotation||null,score:Score.report(state),gameData:gameData.summary(),queueSample:state.queueSample||null,execTrail:state.execTrail||[],daily:state.daily||{},lastReturn:state.lastReturn||null,version:VERSION,created:new Date().toISOString(),enabled:state.enabled,scope:state.scope,background:state.background,household:state.household,status:status,game:lastGame,popup:blockedPopup,travel:state.travel,awayTravel:state.awayTravel,news:panels.latestNews(),members:members,snapshots:snapshots,decisions:state.people,capabilities:caps,logs:logs,last_cycle:lastCycle};
   await cli('uimod.cfg_save',{mod_id:wf.MOD_ID,section:'ui/'+wf.APP_NAME+'/saved',key:manual?'observer-report':'observer-auto',value:JSON.stringify(payload)});
   lastReport=Date.now();return payload;
  }
@@ -724,7 +733,7 @@
    p.goalBlock=null;
    p.commutePending=false;
    if(cache[id]!==note){cache[id]=note;log(m.first_name+': '+note);}
-   snapshots[id]={sampled_at:new Date().toISOString(),stats:stats,queue:queue,hope:{selected_count:0,selected:[]},
+   snapshots[id]={city:character.locatedCityName,sampled_at:new Date().toISOString(),stats:stats,queue:queue,hope:{selected_count:0,selected:[]},
     work:{},autonomy:auto,trait:{},note:note};
    if(!ghost&&state.enabled&&token===epoch&&sameCity)await care.run(m,members,minute,token,{character:character,stats:stats,queue:queue});
    return;
