@@ -14,7 +14,7 @@ const Rel = require(path.join(ui, 'relations.js'));
 const Data = require(path.join(ui, 'game-data.js'));
 function load(name, globals = {}) {
  const context = vm.createContext({ObserverLife:L, ObserverPolicy:P, ObserverGoalMemory:M, ObserverChoices:C,
-  ObserverAgenda:A, ObserverRecovery:R, ObserverRelations:Rel, ObserverGameData:Data, setTimeout:fn => {fn(); return 0;}, ...globals});
+  ObserverAgenda:A, ObserverRecovery:R, ObserverRelations:Rel, ObserverCareerPath:require(path.join(ui,'career-path.js')), ObserverGameData:Data, setTimeout:fn => {fn(); return 0;}, ...globals});
  vm.runInContext(fs.readFileSync(path.join(ui, name), 'utf8'), context);
  return context;
 }
@@ -354,7 +354,7 @@ function appHarness(execute) {
   }}, view:{show(){shows++;}}, trigger:{onActivated:fn=>trigger=fn}, saveState:{register(){}, onLoad:fn => deliver = fn}},
   setInterval:(fn, ms) => intervals.set(ms, fn), setTimeout:() => 0, clearTimeout(){}, addEventListener(){}, Date});
  context.window = context;
- for (const name of ['window','policy','protocol','life','child-care','game-data','goal-memory','scoreboard','agenda','recovery','relations','gathering','choices','life-actions','panels','travel','app'])
+ for (const name of ['window','policy','protocol','life','child-care','game-data','goal-memory','scoreboard','agenda','recovery','career-path','persona','relations','gathering','choices','life-actions','panels','travel','app'])
   vm.runInContext(fs.readFileSync(path.join(ui, name + '.js'), 'utf8'), context, {filename:name + '.js'});
  return {context, intervals, saved, elements, load:value => deliver(JSON.stringify(value)), trigger:event=>trigger(event), shows:()=>shows};
 }

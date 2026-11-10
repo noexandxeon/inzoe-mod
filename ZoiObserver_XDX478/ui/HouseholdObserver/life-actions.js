@@ -1,6 +1,6 @@
 (function (root) {
  'use strict';
- var L=root.ObserverLife, P=root.ObserverPolicy, M=root.ObserverGoalMemory, R=root.ObserverRecovery, Rel=root.ObserverRelations, A=root.ObserverAgenda;
+ var L=root.ObserverLife, P=root.ObserverPolicy, M=root.ObserverGoalMemory, R=root.ObserverRecovery, Rel=root.ObserverRelations, A=root.ObserverAgenda, CP=root.ObserverCareerPath;
  var essentials=[
   {label:'침대',fixture:/(?:^|_)(?:Bed\d|BedAssemble|BunkBed)/i,item:'Bed01',max:1200},
   {label:'냉장고',fixture:/(?:^|_)Fridge\d/i,item:'Fridge02',max:2700},
@@ -1069,11 +1069,20 @@
     plan.primary=info.is_operating===true&&candidate&&profit>0&&!finance.short?'사업 우선':'사업 수입과 본업 비교';
    }
    if(finance.short)plan.primary='생활비 보충 우선';
+   // 0.5.7: the working life this individual is on (직장인 / 창업 / 자유직) and its next step.
+   var day=Math.floor(minute/1440), book=decision.careerPath||(decision.careerPath={});
+   CP.plan(book,{id:member.entity_id,day:day,age:member.age_group,traits:traits,skills:skills,ambition:decision.ambition,
+    employed:member.has_career===true,daysInJob:Number.isFinite(decision.careerSince)?Math.max(0,day-decision.careerSince):0,
+    cash:finance.cash,reserve:finance.reserve,short:finance.short,business:candidate,
+    ownsBusiness:!!plan.ownedBusiness,bizOperating:!!(plan.ownedBusiness&&plan.ownedBusiness.operating===true),
+    bizProfit:plan.ownedBusiness?plan.ownedBusiness.profit:0});
+   if(CP.worksAlone(book)||book.step==='resign'&&book.solo){if(!book.solo||book.solo.since>day)book.solo={since:day};}
+   else book.solo=null;
    decision.lifePlan=plan;
    return plan;
   }
   async function sideIncome(member,character,decision,plan,snapshot,skills,minute,token){
-   if(!plan||!plan.short||!L.adultAge.test(member.age_group)||!L.relaxed(snapshot.queue)||minute<(decision.nextSide||0))return false;
+   if(!plan||!(plan.short||CP.worksAlone(decision.careerPath))||!L.adultAge.test(member.age_group)||!L.relaxed(snapshot.queue)||minute<(decision.nextSide||0))return false;
    var local=await inventory(member,character);
    if(!local)return A.result('waiting','부수입에 쓸 컴퓨터를 확인할 장소 대기',minute+45);
    var computers=closest(local.objects,character,/(?:Computer|Laptop|Desktop|^PC)/i,3);
@@ -1090,7 +1099,7 @@
      if(create)return create;
     }
    },token);
-   if(action){log(named(member)+': 생활비 보충 행동 요청 / '+action.display_name);return true;}
+   if(action){log(named(member)+': '+(plan.short?'생활비 보충':'자유 작업')+' 행동 요청 / '+action.display_name);return true;}
    return A.result('waiting',computers.length?'게임이 허용하는 제작·출판 행동이 없음':'사용 가능한 컴퓨터 없음',minute+90);
   }
   async function attend(member,character,decision,snapshot,time,minute,token,news){
@@ -1439,11 +1448,19 @@
    log(named(member)+': 사교 '+snapshot.stats.stats.Society.pct+'% · 사람을 만나러 '+decision.outing.name+' 이동');
    return true;
   }
+  async function computers(member,character){
+   var local=await inventory(member,character);
+   return local?closest(local.objects,character,/(?:Computer|Laptop|Desktop|^PC)/i,3):[];
+  }
+  async function siteObjects(member,character){
+   var local=await inventory(member,character);
+   return local?closest(local.objects,character,/./,12):[];
+  }
   function reset(){sites=null;householdCache={};homeCache={};houseTasks={};repairs={};}
   return {reset:reset,needs:needs,routine:routine,clean:clean,repair:repair,parcels:parcels,marketNeed:marketNeed,reviewGoal:reviewGoal,trackGoal:trackGoal,prepareGoals:prepareGoals,attend:attend,
    pursueHope:pursueHope,prepareAmbition:prepareAmbition,pursueAmbition:pursueAmbition,
    affection:affection,goalConversation:goalConversation,meetForGoal:meetForGoal,
-   occupation:occupation,sideIncome:sideIncome,outing:outing,socialOuting:socialOuting,ensureTraining:ensureTraining,vacation:vacation,householdPlan:householdPlan,furnish:furnish,move:move,home:homeMember};
+   occupation:occupation,sideIncome:sideIncome,outing:outing,socialOuting:socialOuting,ensureTraining:ensureTraining,vacation:vacation,householdPlan:householdPlan,furnish:furnish,move:move,home:homeMember,computers:computers,siteObjects:siteObjects,objectAction:objectAction};
  }
  root.ObserverLifeActions={create:create};
 })(this);

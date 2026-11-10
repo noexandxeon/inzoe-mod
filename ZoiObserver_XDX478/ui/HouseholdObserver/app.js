@@ -1,8 +1,8 @@
 (function () {
  'use strict';
- var VERSION='0.5.6', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.5.7', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var A=ObserverAgenda, R=ObserverRecovery, Rel=ObserverRelations, M=ObserverGoalMemory;
- var ChildCare=ObserverChildCare, Score=ObserverScoreboard;
+ var ChildCare=ObserverChildCare, Score=ObserverScoreboard, CP=ObserverCareerPath, Persona=ObserverPersona;
  var busy=false, epoch=0, index=0, cache={}, profiles={}, rows={}, members=[], lastReport=0;
  // Kept on window so a live update keeps the log history.
  var logs=window.ZoiObserverLogs||(window.ZoiObserverLogs=[]);
@@ -53,6 +53,12 @@
  var gathering=ObserverGathering.create({cli:cli,write:write,log:log,L:L,Rel:Rel,
   life:function(){return lifeBook();},members:function(){return members;},game:function(){return lastGame;},
   home:function(member,character){return life.home(member,character);},
+  score:function(e){Score.event(state,e);}});
+ var vocation=CP.create({cli:cli,write:write,log:log,
+  computers:function(member,character){return life.computers(member,character);},
+  objects:function(member,character){return life.siteObjects(member,character);},
+  act:function(member,objects,choose,token,offers){return life.objectAction(member,objects,choose,token,offers);},
+  move:function(member,site,token){return life.move(member,site,token);},
   score:function(e){Score.event(state,e);}});
  var panels=ObserverPanels.create({cli:cli,write:write,log:log,state:state,game:function(){return lastGame;},
   background:function(){return state.background;},
@@ -135,11 +141,13 @@
     (p.vacationNote?' · '+esc(p.vacationNote):'')+'</p>';
    if(p.target)html+='<p>구인 후보: '+esc(p.target.name)+' / 적합도 '+esc(p.target.score)+'</p>';
    if(p.openings)html+='<p>현재 빈자리 '+p.openings.length+'종: '+esc(p.openings.slice(0,4).join(', ')||'없음')+'</p>';
+   if(p.persona)html+='<p class="help">성향: '+esc(Persona.describe(p.persona))+'</p>';
+   if(CP.describe(p.careerPath))html+='<p>삶의 방향: '+esc(CP.describe(p.careerPath))+'</p>';
    if(p.lifePlan){
     var plan=p.lifePlan;
     html+='<p>진로 판단: '+esc(plan.primary)+'</p>';
     if(plan.side)html+='<p>부수입 후보: '+esc(plan.side.label)+'</p>';
-    if(plan.business&&!plan.ownedBusiness)html+='<p>창업: '+esc(plan.business.type)+' 후보 · 사업 등록 실행 경로 미확인</p>';
+    if(plan.business&&!plan.ownedBusiness)html+='<p>창업 후보: '+esc(plan.business.type)+'</p>';
     if(plan.ownedBusiness)html+='<p>보유 사업: '+(plan.ownedBusiness.operating?'영업 중':'영업 대기')+'</p>';
    }
    if(p.housePlan){
@@ -703,6 +711,7 @@
   if(cache[id]!==note){cache[id]=note;log(m.first_name+': '+note);}
   if(!state.enabled||token!==epoch||!sameCity)return;
   await keepScore(m,p,hope,stats,work,sleeping,minute);
+  try{await vocation.review(m,p,minute);}catch(e){log(m.first_name+': 진로 확인 보류 / '+e.message);}
   try{await gathering.review(m,p,minute);}catch(e){log(m.first_name+': 초대 확인 보류 / '+e.message);}
   try{await life.reviewGoal(m,p,snapshots[id],minute);}
   catch(e){log(m.first_name+': 목표 결과 확인 보류 - '+e.message);}
@@ -766,6 +775,7 @@
   var skills=profile.skills.skills||[];
   var routine=L.routineNeed(needs);
   var urgent=['Toilet','Hunger','Sleep','Cleanliness'].some(function(k){return C.catDonut(k,needs[k]);});
+  var step=p.careerPath&&p.careerPath.step;
   var tasks=[
    {key:'outingProgress',label:'외출 진행·귀가',base:95,duringGoal:true,eligible:!!p.outing,
     run:function(){return life.outing(m,character,p,snapshots[id],time,minute,token);}},
@@ -802,7 +812,14 @@
    {key:'event',label:'소식함 행사',base:32,long:true,eligible:!!(p.outing&&p.outing.event||!gathering.waiting(p)&&news&&news.events&&news.events.length),deadline:eventEnd,
     run:function(){return attempt('행사',function(){return life.attend(m,character,p,snapshots[id],time,minute,token,news);});}},
    {key:'clean',label:'집 청소',base:30,duringGoal:true,run:function(){return attempt('청소',function(){return life.clean(m,character,p,snapshots[id],minute,token);});}},
-   {key:'side',label:'생활비 보충',base:55,eligible:!!(p.lifePlan&&p.lifePlan.short),
+   {key:'vocation',label:'진로 실행',base:36,eligible:ChildCare.workAge(m,L)&&!p.goal&&!p.outing&&!!step&&/^(?:resign|retire|start_business|run_business)$/.test(step)&&
+     !(p.careerPath.pending)&&!work.is_working_time&&!work.is_commute_time&&!work.is_at_work,
+    run:function(){return attempt('진로 실행',function(){
+     if(step==='resign'||step==='retire')return vocation.leave(m,character,p,minute,token);
+     if(step==='start_business')return vocation.start(m,character,p,minute,token);
+     return vocation.run(m,character,p,p.lifePlan&&p.lifePlan.ownedBusiness,time,minute,token);
+    });}},
+   {key:'side',label:p.lifePlan&&p.lifePlan.short?'생활비 보충':'자유 작업',base:p.lifePlan&&p.lifePlan.short?55:30,eligible:!!(p.lifePlan&&(p.lifePlan.short||CP.worksAlone(p.careerPath))),
     run:function(){return attempt('부수입',function(){return life.sideIncome(m,character,p,p.lifePlan,snapshots[id],skills,minute,token);});}},
    {key:'outing',label:'여가 외출',base:15,long:true,eligible:!p.outing&&!gathering.waiting(p),
     run:function(){return attempt('외출',function(){return life.outing(m,character,p,snapshots[id],time,minute,token);});}},
@@ -812,6 +829,9 @@
    {key:'career',label:'구직·이직',base:m.has_career?8:38,eligible:ChildCare.mayJoin(m,L),
     run:function(){return attempt('진로',function(){return career(m,p,time,minute,token,profile,work,queue);});}}
   ];
+  // Each Zoi weighs free-time activities by temperament, ambition and a personal leaning of its own.
+  p.persona=Persona.weights(P.traits(profile.trait),CP.ambitionFocus(p.ambition),id);
+  Persona.apply(tasks,p.persona);
   var context={late:time.hour>=19,lowNeeds:lowNeeds};
   var ranked=A.order(p,tasks,minute,context);
   p.upcoming=ranked.slice(0,3).map(function(r){return r.task.label;});
@@ -883,6 +903,7 @@
   var list=await cli('career.list_openings');if(!Array.isArray(list.openings))throw Error('구인 응답 형식 변경');
   var available=list.openings.filter(function(o){return o.vacancy>0&&(!slot||o.job_id!==slot.jobDtId);});
   p.openings=Array.from(new Set(list.openings.filter(function(o){return o.vacancy>0;}).map(function(o){return o.job_name||o.job_id;})));
+  if(!CP.mayApply(p.careerPath,!!slot))return A.result('waiting','진로 계획: '+(CP.STEPS[p.careerPath.step]||p.careerPath.step),minute+360);
   if(p.lifePlan&&p.lifePlan.primary==='사업 우선')return A.result('waiting','현재 운영 중인 사업 수익 확인',minute+360);
   if(!available.length){p.target=null;return A.result('waiting','게임의 실제 채용 공석 없음',minute+360);}
   // Limit table fetches per evaluation to avoid flooding the game on large worlds.
@@ -892,11 +913,13 @@
    var organization=(rows[opening.career_dt_id].organizations||[]).find(function(o){return o.jobId===opening.job_id;});
    return ObserverGameData.careerAgeAllowed(organization,m.age_group);
   });
-  var best=P.pick(available,profile.trait,profile.skills.skills||[],rows,id);
+  // The current ambition and this individual's own taste count toward which job fits.
+  var taste=function(desired,careerId){var b=CP.ambitionBonus(desired,p.ambition);b.score+=Math.round(CP.quirk(id,careerId)*6);return b;};
+  var best=P.pick(available,profile.trait,profile.skills.skills||[],rows,id,taste);
   if(!best){p.target=null;return A.result('waiting','현재 나이·조건에 맞는 채용 공석 없음',minute+360);}
   p.target={name:best.opening.job_name,id:best.opening.job_id,score:best.fit.score,reasons:best.fit.reasons};
   if(slot){
-   var fit=P.score(profile.trait,profile.skills.skills||[],await table(key),key);
+   var fit=P.score(profile.trait,profile.skills.skills||[],await table(key),key,taste);
    var days=time.day-(p.careerSince===undefined?time.day:p.careerSince);
    if(!P.shouldSwitch(profile.trait,days,fit,best))return false;
   }
@@ -1091,7 +1114,7 @@
   members=[];playedGroups=[];rosterMap='';
   lastPendingPoll=0;queueSampleAt={};
   lastPopup=null;blockedPopup=null;popupTries=0;nextPopupTry=0;scheduleCancel=null;
-  life.reset();panels.reset();care.reset();gathering.reset();
+  life.reset();panels.reset();care.reset();gathering.reset();vocation.reset();
   pendingResume=true;pausedUntil=0;errors=0;firstError=0;
   log('저장된 관찰 설정을 불러왔습니다. 목표와 현재 게임 상태를 다시 확인합니다.');
  };

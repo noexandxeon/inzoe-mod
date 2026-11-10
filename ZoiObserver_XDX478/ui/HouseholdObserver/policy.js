@@ -24,13 +24,16 @@
   if(/coffee|cafe/i.test(id)) return ['CoffeeArt','Speaking'];
   return [];
  }
- function score(t,skills,row,id) {
+ function score(t,skills,row,id,extra) {
   var desired=skillsFor(row,id), ts=traits(t), points=0, reasons=[];
   desired.forEach(function(s){
    var actual=skills.filter(function(x){return x.id===s;})[0];
    if(actual && actual.level>0){points+=actual.level*2; reasons.push(s+' Lv.'+actual.level);}
    ts.forEach(function(tr){if((affinity[tr]||[]).indexOf(s)>=0){points+=12;reasons.push(tr+' / '+s);}});
   });
+  // extra: what this individual adds on top (ambition, personal taste) - see career-path.js.
+  var more=extra&&extra(desired,id);
+  if(more){points+=more.score;reasons=reasons.concat(more.reasons||[]);}
   return {score:points,reasons:reasons,known:desired.length>0};
  }
  function switchRule(t) {
@@ -39,9 +42,9 @@
   if(ts.indexOf('Adventurer')>=0 || ts.indexOf('Independent')>=0) return {days:3,margin:10};
   return {days:7,margin:16};
  }
- function pick(openings,t,skills,rows,entityId) {
+ function pick(openings,t,skills,rows,entityId,extra) {
   return openings.filter(function(o){return o.vacancy>0 && o.career_entity_id>0 && o.job_id;}).map(function(o){
-   return {opening:o,fit:score(t,skills,rows[o.career_dt_id],o.career_dt_id)};
+   return {opening:o,fit:score(t,skills,rows[o.career_dt_id],o.career_dt_id,extra)};
   }).sort(function(a,b){
    var d=b.fit.score-a.fit.score;if(d)return d;
    var ak=a.opening.job_id+':'+a.opening.career_entity_id, bk=b.opening.job_id+':'+b.opening.career_entity_id;

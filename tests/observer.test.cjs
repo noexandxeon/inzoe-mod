@@ -16,7 +16,7 @@ const Data = require(path.join(ui, 'game-data.js'));
 const Care = require(path.join(ui, 'child-care.js'));
 // Every shared module the mod's script order provides, so these older scenarios run against the current code.
 function load(name, globals = {}) {
- const context = vm.createContext({ObserverLife:L, ObserverPolicy:P, ObserverGoalMemory:M, ObserverRecovery:R, ObserverRelations:Rel, ObserverAgenda:A,
+ const context = vm.createContext({ObserverLife:L, ObserverPolicy:P, ObserverGoalMemory:M, ObserverRecovery:R, ObserverRelations:Rel, ObserverCareerPath:require(path.join(ui,'career-path.js')), ObserverAgenda:A,
   ObserverGameData:Data, ObserverChildCare:Care, ObserverChoices:C, setTimeout:fn => {fn(); return 0;}, ...globals});
  vm.runInContext(fs.readFileSync(path.join(ui, name), 'utf8'), context);
  return context;
