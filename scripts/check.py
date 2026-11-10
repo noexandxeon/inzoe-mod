@@ -46,6 +46,7 @@ def main():
     assert parser.sources.index('rotation.js') < parser.sources.index('app.js')
     assert parser.sources.index('fieldcheck.js') < parser.sources.index('app.js')
     assert parser.sources.index('family.js') < parser.sources.index('app.js')
+    assert parser.sources.index('why.js') < parser.sources.index('app.js')
     assert parser.sources.index('relations.js') < parser.sources.index('gathering.js') < parser.sources.index('app.js')
     assert parser.sources.index('game-data.js') < parser.sources.index('life-actions.js')
     version = json.loads((MOD / 'ZoiObserver_XDX478.uplugin').read_text(encoding='utf-8'))['VersionName']
