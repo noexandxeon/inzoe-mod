@@ -389,7 +389,8 @@
      return it.kind==='hope'&&!/^(?:completed|ended)$/.test(it.phase)&&!(Number.isFinite(it.expire)&&minute>=it.expire)&&
       !listed.some(function(h){return h.hope_id===it.name;});
     }).length;
-    var verdict=M.gone(M.record(decision,plan,minute),minute,together);
+    var leftItem=M.record(decision,plan,minute), verdict=M.gone(leftItem,minute,together);
+    leftItem.leftAt=minute;
     M.note(decision,plan,verdict.phase,verdict.reason,'새 목표 확인',minute);
     if(verdict.phase==='completed')M.flow(decision,plan,'done',{},minute);
     log(named(member)+(verdict.phase==='completed'?': 소망 완료 / ':': 소망 종료 / ')+goal.name+' · '+verdict.reason);

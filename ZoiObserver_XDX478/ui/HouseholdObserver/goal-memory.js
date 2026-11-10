@@ -30,12 +30,15 @@
   var memory=decision.goalMemory||{};
   var leaving=Object.keys(memory).filter(function(id){
    var item=memory[id];
-   return item.kind===(kind||'hope')&&!active[id]&&item.phase!=='completed'&&item.phase!=='ended'&&!(Number.isFinite(item.expire)&&minute>=item.expire);
+   // A hope the goal review settled a moment ago in this same look left in the same batch (leftAt).
+   return item.kind===(kind||'hope')&&!active[id]&&(item.leftAt===minute||
+    item.phase!=='completed'&&item.phase!=='ended'&&!(Number.isFinite(item.expire)&&minute>=item.expire));
   }).length;
   Object.keys(memory).forEach(function(id){
    var item=memory[id];
    if(item.kind===(kind||'hope')&&!active[id]&&item.phase!=='completed'&&item.phase!=='ended'){
     var verdict=gone(item,minute,leaving);
+    item.leftAt=minute;
     item.phase=verdict.phase;item.reason=verdict.reason;item.next='새 목표 확인';
     item.history.push({minute:minute,phase:verdict.phase,reason:verdict.reason});item.history=item.history.slice(-8);
    }

@@ -113,3 +113,13 @@ test('before a sleep that is not an emergency, hunger and toilet are handled fir
   assert.equal(L.bedtimeNeed(s(80, 80, 80, 80)), null);
   assert.equal(L.bedtimeNeed(s(10, 80, 20, 80)).key, 'Hunger');
 });
+
+test('two hopes leaving together stay unverified even when the goal review settles one first', () => {
+  const d = {}, a = {kind: 'hope', instance: 1, name: 'Hope_A', expire_ticks: 5000 * 600000000}, b = {kind: 'hope', instance: 2, name: 'Hope_B', expire_ticks: 5000 * 600000000};
+  [a, b].forEach(p => { M.record(d, p, 1000); M.flow(d, p, 'confirm', {}, 1000); });
+  const first = d.goalMemory[M.key(a)], verdict = M.gone(first, 1050, 2);
+  first.phase = verdict.phase; first.reason = verdict.reason; first.leftAt = 1050;
+  M.sync(d, [], 1050);
+  assert.equal(d.goalMemory[M.key(a)].phase, 'ended');
+  assert.equal(d.goalMemory[M.key(b)].phase, 'ended');
+});
