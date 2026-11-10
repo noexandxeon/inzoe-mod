@@ -805,6 +805,10 @@
     // 0.4.7: the game tags the actions that count for a hope/ambition with Mission_<name>
     // (e.g. MovieScreen_WatchMovie carries Mission_Hope_HouseholdBiz_21). Use them when the condition id finds nothing.
     if(!practice&&!bags.length&&plan.name)bags=await matchGoalBags('Mission_'+plan.name);
+    // Preference_Coffee also tags books and smelling coffee. A drinking wish needs consumption.
+    if(condition.conditionId1==='Preference_Coffee'&&/DrinkCoffee/i.test(plan.name)){
+     bags=bags.filter(function(b){return /(?:^|_)Drink(?:_|$)|^BuyAndEat_ServedCoffee|^Object_Order_Coffee_Lounge$/i.test(b);});
+    }
     if(!practice&&!bags.length){
      if(schoolSite)return false;
      M.note(decision,plan,'unsupported','실행 연결 대기 / '+type+' '+condition.conditionId1,
@@ -1005,12 +1009,13 @@
       continue;
      }
      if(type==='EnterSiteCount'||type==='EnterSiteTagCount'){
+      if(decision.outing){plan.status='현재 외출을 마친 뒤 목적지 재검토';continue;}
       var site=await visitForGoal(member,character,condition,snapshot,time,token);
       plan.status=site?'목적지로 이동 중':'여유 시간 또는 이용 가능한 목적지 대기';
       if(site){
        trackGoal(decision,plan,'LLM_WalkToSite',site.entity_id,minute,progress);
        M.flow(decision,plan,'confirm',{need:'장소 방문',prep:'외출'},minute);
-       decision.outing={site:site.entity_id,name:site.l10n||site.id,start:minute};
+       decision.outing={site:site.entity_id,name:site.l10n||site.id,start:minute,goalVisit:plan.name};
        log(named(member)+'의 '+label+' 외출: '+decision.outing.name);return true;
       }
       continue;
@@ -1356,12 +1361,15 @@
    return true;
   }
   async function outing(member,character,decision,snapshot,time,minute,token){
-   if((!L.adultAge.test(member.age_group)&&!(decision.outing&&decision.outing.goalVisit))||
-      !L.relaxed(snapshot.queue)||snapshot.work.is_at_work||snapshot.work.is_commute_time||snapshot.work.is_working_time)return false;
+   var trip=decision.outing;
+   var free=L.relaxed(snapshot.queue)&&!snapshot.work.is_at_work&&!snapshot.work.is_commute_time&&!snapshot.work.is_working_time;
+   if(!trip&&(!L.adultAge.test(member.age_group)||!free))return false;
    var location=entity(character.locatedSiteId), home=await homeMember(member,character);
-   if(decision.outing){
-    var trip=decision.outing;
-    if(location===home&&trip.returning){log(named(member)+': 외출 후 귀가 확인');decision.outing=null;return false;}
+   if(trip){
+    if(location===home&&(trip.returning||trip.arrived||minute-trip.start>=240)){
+     if(trip.returning||trip.arrived)log(named(member)+': 외출 후 귀가 확인');
+     decision.outing=null;return false;
+    }
     if(location===trip.site&&!trip.arrived){
      trip.arrived=minute;log(named(member)+': '+trip.name+' 도착 확인');
      if(trip.vacation&&decision.vacation){
@@ -1373,6 +1381,9 @@
       }
      }
     }
+   }
+   if(!free)return false;
+   if(trip){
     if((trip.event?minute>=trip.end||trip.arrived&&minute-trip.arrived>=120:
        trip.arrived&&minute-trip.arrived>=120||time.hour>=19||minute-trip.start>=300)&&
        location!==home&&home>0&&minute>=(trip.nextReturn||0)){
@@ -1384,7 +1395,6 @@
       return true;
      }
     }
-    if(location===home&&!trip.arrived&&minute-trip.start>=240)decision.outing=null;
     return false;
    }
    if(snapshot.work.is_working_day||time.hour<10||time.hour>15||location!==home||minute<(decision.nextOuting||0))return false;

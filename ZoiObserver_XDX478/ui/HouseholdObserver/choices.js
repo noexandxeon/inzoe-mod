@@ -11,6 +11,24 @@
   return (nodes||[]).reduce(function(all,n){return all.concat(n,widgets(n.children));},[]);
  }
  function usable(n){return n&&n.role==='button'&&n.ref&&!/disabled|dimmed|unreachable/i.test(String(n.state||''));}
+ function youthNotice(p,row,labels,tree,member){
+  if(p.popup_id!=='None'||!row||row.iD!=='ChangeGrowthStep_Youth'||row.popupType!=='Drama'||
+     member.age_group!=='Youth'||tree.ui_type!=='DramaPopup'||!labels[row.title]||
+     clean(tree.label)!==clean(labels[row.title]))return null;
+  var suffix=clean(String(labels[row.desc]||'').split(/\r?\n\s*\r?\n/).slice(1).join(' ')), desc=clean(p.desc);
+  var names=[clean(member.last_name+' '+member.first_name),clean(member.first_name+' '+member.last_name)];
+  if(!suffix||!desc.endsWith(suffix)||!member.first_name||!member.last_name||
+     !names.some(function(name){return desc.indexOf(name)===0;}))return null;
+  var definitions=row.buttonDetail||[], buttons=p.buttons||[];
+  if(definitions.length!==2||buttons.length!==2)return null;
+  var confirm=definitions.find(function(b){return b.listKey==='btn0'&&b.buttonType==='Primary'&&b.scriptId==='None';});
+  var alternate=definitions.find(function(b){return b.listKey==='btn1'&&b.scriptId==='Open_HopeLife_Selection_UI';});
+  if(!confirm||!alternate)return null;
+  function matches(b,d){return b.list_key===d.listKey&&b.dimmed===false&&labels[d.buttonText]&&clean(b.text)===clean(labels[d.buttonText]);}
+  if(!buttons.some(function(b){return matches(b,alternate);}))return null;
+  var button=buttons.find(function(b){return matches(b,confirm);});
+  return button?{button:button,why:'이미 반영된 연령대 상승 안내 확인'}:null;
+ }
  function popup(p,row,context){
   var definitions=row&&row.buttonDetail||[];
   var text=clean(p.title)+' '+clean(p.desc), id=p.popup_id||'';
@@ -258,7 +276,7 @@
   return amounts.length===1?amounts[0]:null;
  }
  function messageKey(thread){return JSON.stringify([thread.key,thread.last.messageId,thread.last.timestamp]);}
- var api={clean:clean,widgets:widgets,usable:usable,popup:popup,cardScore:cardScore,paymentAmount:paymentAmount,messageKey:messageKey,
+ var api={clean:clean,widgets:widgets,usable:usable,popup:popup,youthNotice:youthNotice,cardScore:cardScore,paymentAmount:paymentAmount,messageKey:messageKey,
   preferencePlan:preferencePlan,feedEntries:feedEntries,events:events,catDonut:catDonut,clockMinute:clockMinute,
   invitation:invitation,responseButton:responseButton,phoneCardScore:phoneCardScore};
  if(typeof module!=='undefined'&&module.exports)module.exports=api;

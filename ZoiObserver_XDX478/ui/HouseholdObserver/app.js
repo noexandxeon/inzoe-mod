@@ -1,6 +1,6 @@
 (function () {
  'use strict';
- var VERSION='0.6.10', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.6.11', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var A=ObserverAgenda, R=ObserverRecovery, Rel=ObserverRelations, M=ObserverGoalMemory;
  var ChildCare=ObserverChildCare, Score=ObserverScoreboard, CP=ObserverCareerPath, Persona=ObserverPersona, Rot=ObserverRotation, Field=ObserverFieldCheck, Family=ObserverFamily, Why=ObserverWhy;
  var claims=Family.create(), nowMinute=NaN, popupTrack=null, expectedSelected=null, lastSelected=null;
@@ -459,12 +459,21 @@
    var button=id==='NoticeScheduleConflict'?(popup.buttons||[]).find(function(b){
     return b.dimmed===false&&/^(?:기존 일정 유지|유지하기|기존 일정 유지하기|Keep existing schedule)$/i.test(b.text||'');
    }):protocol.popupChoice(popup,row,allowed);
-   var picked=!button&&C.popup(popup,row,{busy:!!unavailable});
+   var picked;
+   if(!button&&id==='None'&&member.age_group==='Youth'&&(popup.buttons||[]).length===2&&
+      (current.pause_reasons||[]).indexOf('DramaPopup')>=0){
+    var growth=await gameData.row('Popup','ChangeGrowthStep_Youth');
+    var keys=[growth.title,growth.desc].concat((growth.buttonDetail||[]).map(function(b){return b.buttonText;}));
+    var labels=await cli('l10n.get',{Keys:JSON.stringify(keys)});
+    var tree=await cli('ui.get_tree',{Window:'DramaPopup',max_nodes:25});
+    picked=C.youthNotice(popup,growth,labels,tree,member);
+   }
+   if(!button&&!picked)picked=C.popup(popup,row,{busy:!!unavailable});
    if(picked)button=picked.button;
    var replyArgs=protocol.popupArgs(popup,button);
    if(!replyArgs){if(popupTries===1)log('자동 응답 보류: '+id+' / 선택의 효과를 확인할 수 없음');return;}
    var confirm=await cli('ui.get_blocking');
-   if(!(confirm.popups||[]).some(function(p){return p.popup_id===id&&p.desc===popup.desc&&
+   if((confirm.popups||[]).length!==1||!confirm.popups.some(function(p){return p.popup_id===id&&p.desc===popup.desc&&
      (p.buttons||[]).some(function(b){return b.list_key===button.list_key&&b.index===button.index&&b.text===button.text&&b.dimmed===false;});}))return;
    await write('ui.click_popup_button',replyArgs,token,id,actor);
    var after=await cli('ui.get_blocking');

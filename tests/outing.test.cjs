@@ -36,7 +36,8 @@ function world(opts = {}) {
   siteRows[1].defaultInfo.tags=[];
   siteRows[2].defaultInfo.tags=['FishIngShop'];
  }
- const condition=opts.fishing?'Ambition_Fishing':'Coffee';
+ if(opts.visit)siteRows[2].defaultInfo.tags=['FarmShop'];
+ const condition=opts.fishing?'Ambition_Fishing':opts.visit?'FarmShop':opts.coffeeBook?'Preference_Coffee':'Coffee';
  let done = false;
  const cli = async (name, args = {}) => {
   if (name === 'entity.reflect') {
@@ -49,10 +50,14 @@ function world(opts = {}) {
    return {};
   }
   if (name === 'data.table_get' && args.Alias === 'Hope') return {missionId: 'M1'};
-  if (name === 'data.table_get' && args.Alias === 'Mission') return {conditions: [{conditionType: 'InteractionBagCount', conditionId1: condition}]};
+  if (name === 'data.table_get' && args.Alias === 'Mission') return {conditions: [{conditionType: opts.visit?'EnterSiteTagCount':'InteractionBagCount', conditionId1: condition}]};
   if (name === 'data.table_get' && args.Alias === 'Object' && args.Row === 'Rod') return {objectTags:['FishingRod']};
   if (name === 'data.table_get_all' && args.Alias === 'Site') return siteRows;
   if (name === 'data.table_get') throw Error('Row not found');
+  if (name === 'interaction.search'&&opts.coffeeBook) return {results:[
+   {interaction_bag_id:'Bookshelf_SitRead_CoffeeArt_Book',tags:[condition]},
+   {interaction_bag_id:'Object_Coffee_Drink',tags:[condition]}
+  ]};
   if (name === 'interaction.search') return {results: args.Keyword === condition ?
    [{interaction_bag_id:opts.fishing?'Click_Fishing':'CoffeeMachine_Order',tags:[condition]}] : []};
   if (name === 'world.get_loaded_sites') return {map_id: 'Cahaya_Map', sites};
@@ -63,6 +68,9 @@ function world(opts = {}) {
    return {total: objects.length, objects};
   }
   if (name === 'entity.scan_objects') return {objects: []};
+  if (name === 'interaction.list_available'&&opts.coffeeBook) return {interactions: Number(args.target_entity_id)===MACHINE?
+   [{enabled:true,interaction_bag_id:'Object_Coffee_Drink',display_name:'커피 마시기'}]:
+   [{enabled:true,interaction_bag_id:'Bookshelf_SitRead_CoffeeArt_Book',display_name:'커피 책 읽기'}]};
   if (name === 'interaction.list_available') return {interactions: Number(args.target_entity_id) === MACHINE ?
    [{enabled: true, interaction_bag_id: 'CoffeeMachine_Order', display_name: '커피 주문하기'}] : [{enabled: true, interaction_bag_id: 'Sleep_Bed01', display_name: '자기'}]};
   if (name === 'schedule.diagnose') return {has_schedule: false};
@@ -130,4 +138,25 @@ test('fishing checks the inventory first and sends an equipped Zoi to water inst
  const equipped=world({fishing:true,rod:true});
  assert.equal(await equipped.actions.pursueHope(equipped.member,equipped.character,equipped.decision,equipped.snapshot,at(10),600,1),true);
  assert.equal(equipped.writes[0][1].target_entity_id,String(PARK));
+});
+
+test('coffee drinking rejects the tagged coffee book and uses the native drink action',async()=>{
+ const w=world({coffeeBook:true});
+ w.arrive(CAFE);
+ assert.equal(await w.actions.pursueHope(w.member,w.character,w.decision,w.snapshot,at(10),600,1),true);
+ assert.equal(w.writes[0][1].interaction_bag_id,'Object_Coffee_Drink');
+});
+
+test('an explicit site wish waits for the current trip, and a teen returning home clears it',async()=>{
+ const w=world({visit:true});
+ w.member.age_group='HighTeen';
+ w.decision.outing={site:PARK,name:'공원',start:400,arrived:490};
+ assert.equal(await w.actions.pursueHope(w.member,w.character,w.decision,w.snapshot,at(10),600,1),false);
+ assert.equal(w.writes.length,0);
+ w.snapshot.queue={queue_count:1};
+ await w.actions.outing(w.member,w.character,w.decision,w.snapshot,at(10,20),620,1);
+ assert.equal(w.decision.outing,null);
+ w.snapshot.queue={queue_count:0};
+ assert.equal(await w.actions.pursueHope(w.member,w.character,w.decision,w.snapshot,at(10,21),621,1),true);
+ assert.equal(w.decision.outing.goalVisit,'Hope_Winter_DrinkCoffee');
 });

@@ -387,6 +387,41 @@ function appHarness(execute, beforeSave) {
   vm.runInContext(fs.readFileSync(path.join(ui, name + '.js'), 'utf8'), context, {filename:name + '.js'});
  return {context, intervals, saved, elements, load:value => deliver(JSON.stringify(value)), trigger:event=>trigger(event), shows:()=>shows};
 }
+test('the anonymous youth growth notice confirms only the matching native drama and harmless button',async()=>{
+ const member={entity_id:1,first_name:'예성',last_name:'윤',household_id:11,age_group:'Youth'};
+ const row={iD:'ChangeGrowthStep_Youth',popupType:'Drama',title:'TITLE',desc:'DESC',buttonDetail:[
+  {listKey:'btn1',buttonType:'Secondary',scriptId:'Open_HopeLife_Selection_UI',buttonText:'LIFE'},
+  {listKey:'btn0',buttonType:'Primary',scriptId:'None',buttonText:'OK'}
+ ]};
+ const labels={TITLE:'연령대 상승!',DESC:'{0}의 연령대가 {1}로 상승했습니다.\n\n새로운 책임과 기회가 기다립니다.',LIFE:'소망하는 삶 선택',OK:'확인'};
+ const popup={popup_id:'None',desc:'윤 예성의 연령대가 청년으로 상승했습니다.\n\n새로운 책임과 기회가 기다립니다.',buttons:[
+  {index:0,list_key:'btn1',text:'소망하는 삶 선택',dimmed:false},{index:1,list_key:'btn0',text:'확인',dimmed:false}
+ ]};
+ let open=true;
+ const writes=[];
+ const blocking=()=>open?{popup_count:1,primary_detail:'None',pause_reasons:['DramaPopup']}:{popup_count:0};
+ const h=appHarness((name,args)=>{
+  if(name==='game.get_state')return {phase:'in_game',map_id:'Gangnam_Map',possessed_entity_id:1,blocking:blocking()};
+  if(name==='environment.get_time')return {day:1,hour:0,minute:20};
+  if(name==='environment.get_simulation')return {is_paused:true};
+  if(name==='household.get_members')return {household_id:11,members:[member]};
+  if(name==='ui.get_blocking')return {...blocking(),popups:open?[popup]:[]};
+  if(name==='data.table_get'&&args.Row==='ChangeGrowthStep_Youth')return row;
+  if(name==='l10n.get')return labels;
+  if(name==='ui.get_tree')return {ui_type:'DramaPopup',label:'연령대 상승!'};
+  if(name==='cli.help')return {id:args.command,access:'Public'};
+  if(name==='ui.click_popup_button'){writes.push({...args});open=false;return {clicked:true};}
+  return {};
+ });
+ h.load({schema:1,enabled:true,household:11,people:{}});
+ await h.intervals.get(10000)();
+ assert.deepEqual(writes,[{list_key:'btn0'}]);
+ const choice=h.context.ObserverChoices.youthNotice;
+ const tree={ui_type:'DramaPopup',label:'연령대 상승!'};
+ assert.equal(choice({...popup,desc:'다른 조이의 연령대가 상승했습니다. 새로운 책임과 기회가 기다립니다.'},row,labels,tree,member),null);
+ assert.equal(choice(popup,row,labels,{...tree,label:'구매하시겠습니까?'},member),null);
+ assert.equal(choice(popup,{...row,buttonDetail:[row.buttonDetail[0],{...row.buttonDetail[1],scriptId:'Purchase'}]},labels,tree,member),null);
+});
 test('the game loop saves one 15-day archive, retries a failed write and preserves the usual reports', async () => {
  let day=0, now=1000000, writes=[], failed=false;
  const h=appHarness(name=>{
