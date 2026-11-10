@@ -1,6 +1,6 @@
 (function () {
  'use strict';
- var VERSION='0.6.5', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.6.6', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var A=ObserverAgenda, R=ObserverRecovery, Rel=ObserverRelations, M=ObserverGoalMemory;
  var ChildCare=ObserverChildCare, Score=ObserverScoreboard, CP=ObserverCareerPath, Persona=ObserverPersona, Rot=ObserverRotation, Field=ObserverFieldCheck, Family=ObserverFamily, Why=ObserverWhy;
  var claims=Family.create(), nowMinute=NaN, popupTrack=null, expectedSelected=null, lastSelected=null;
@@ -1064,8 +1064,13 @@
    return raw&&raw.v===1?raw:null;
   }catch(_){return null;}
  }
+ // 0.6.6: at 5x speed a 10-second look is 24 game minutes apart (measured in game): the Zoi went to bed hungry and
+ // woke at 0%. The look now comes round faster the faster the game runs; one look still never overlaps the next.
+ var gameSpeed=1, cycleStartedAt=0;
+ function cyclePeriod(speed){return speed>=4?5000:speed>=2?7000:10000;}
+ function cycleDue(){return Date.now()-cycleStartedAt>=cyclePeriod(gameSpeed)-200;}
  async function cycle(){
-  if(busy||watching||Date.now()<pausedUntil)return;busy=true;var token=epoch;
+  if(busy||watching||Date.now()<pausedUntil)return;busy=true;var token=epoch;cycleStartedAt=Date.now();
   try{
    lastGame=await cli('game.get_state');
    // City transitions and loading screens are not errors; they must never stop the observer.
@@ -1073,6 +1078,7 @@
    await gameData.catalog();
    var time=await cli('environment.get_time');
    nowMinute=gameMinute(time);
+   gameSpeed=time.paused?1:Number(time.time_scale)||1;
    if(state.enabled&&state.travel){
     try{
      if(await travel.advance(lastGame,time,token)){
@@ -1246,7 +1252,7 @@
  log(VERSION+' 준비. 다른 작업 모드와 행동 결과를 확인합니다.');
  render();
  // 0.4.7: a running copy can be stopped so new script files load in place (live update, no save/load).
- var loopTimers=[setInterval(cycle,10000),setInterval(watchChoice,1500)], firstCycle=setTimeout(cycle,2500);
+ var loopTimers=[setInterval(cycle,10000),setInterval(function(){if(gameSpeed>=2&&cycleDue())cycle();},1000),setInterval(watchChoice,1500)], firstCycle=setTimeout(cycle,2500);
  window.ZoiObserverShutdown=function(){
   loopTimers.forEach(clearInterval);clearTimeout(firstCycle);epoch++;
   log('새 버전 코드로 교체합니다. 자동 관리 상태는 그대로 이어집니다.');
