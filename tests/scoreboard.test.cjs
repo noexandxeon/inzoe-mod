@@ -119,6 +119,61 @@ test('a conversation never seen running still counts when the relationship measu
  assert.equal(Rel.settle(life, 1, 2, rel(10), 840, {notStarted: true}).outcome, 'worse');
 });
 
+test('facts replayed from goal memory are counted once however many there are, and again only when they grow', () => {
+ const state = {}, p = {goalMemory: {}};
+ for (let g = 0; g < 30; g++) {
+  const failures = {};
+  for (let f = 0; f < 20; f++) failures['bag' + f] = {count: 1, until: 0};
+  p.goalMemory['hope:' + g] = {name: 'Hope' + g, kind: 'hope', instance: g, phase: 'waiting', block: {kind: 'missing'}, failures};
+ }
+ p.goalMemory['ambition:900'] = {name: 'Amb', kind: 'ambition', instance: 900, phase: 'completed', failures: {}};
+ p.goal = {name: 'Hope0', instance: 0, bag: 'x', sentAt: 5};
+ p.outing = {goalVisit: 'Hope0', site: 40, start: 600, name: '카페'};
+ // 600 failure facts, far more than any bounded key table: looked at on two different days.
+ S.memory(state, at(9), 1, p);
+ S.memory(state, at(9, 10), 1, p);
+ S.memory(state, (day + 1) * 1440 + 600, 1, JSON.parse(JSON.stringify(p)));
+ const first = S.summary(state, day, 1);
+ assert.equal(first.failed, 600);
+ assert.equal(first.requests, 1);
+ assert.equal(first.outings, 1);
+ assert.equal(first.ambition, 1);
+ assert.equal(S.summary(state, day + 1, 1), null);
+ // A real new failure and an outing that found its action are counted when they happen.
+ p.goalMemory['hope:3'].failures.bag0.count = 3;
+ p.outing.found = true;
+ S.memory(state, at(11), 1, p);
+ assert.equal(S.summary(state, day, 1).failed, 602);
+ assert.equal(S.summary(state, day, 1).outingFound, 1);
+});
+
+test('a finished hope that stays listed is not counted again after hundreds of other facts', () => {
+ const state = {};
+ S.hopes(state, at(9), 1, [{name: 'Stay', instance: 7}], {'(Value=7)': finished});
+ for (let i = 0; i < 900; i++) S.event(state, {minute: at(10), zoi: 1, kind: 'request', key: 'r' + i});
+ assert.deepEqual(S.hopes(state, at(11), 1, [{name: 'Stay', instance: 7}], {'(Value=7)': finished}), []);
+ assert.equal(S.hopesChanged(state, 1, ['Stay']), false);
+ assert.equal(S.summary(state, day, 1).completed, 1);
+ assert.equal(S.summary(state, day, 1).offered, 1);
+ // Once it leaves the list it is simply forgotten, not reported as vanished.
+ assert.deepEqual(S.hopes(state, at(12), 1, [], {'(Value=7)': finished}), []);
+ assert.equal(S.summary(state, day, 1).gone, 0);
+});
+
+test('receipts from a discarded timeline are not restored; receipts the loaded timeline already contains are', () => {
+ const R = require(path.join(ui, 'recovery.js'));
+ const mirror = {people: {'1': {payments: {early: {phase: 'ledger-matched', minute: 500}, late: {phase: 'requested', minute: 900}, old: {phase: 'requested'}},
+  replyRequests: {early: {phase: 'outgoing', minute: 480}, late: {phase: 'requested', minute: 910}}}}};
+ // The player loaded a save from game minute 700: what the mod did at 900+ never happened there.
+ const rewound = {people: {}};
+ assert.equal(R.mergeProcessed(rewound, mirror, {minute: 700, continuous: false}), 2);
+ assert.deepEqual(Object.keys(rewound.people['1'].payments), ['early']);
+ assert.deepEqual(Object.keys(rewound.people['1'].replyRequests), ['early']);
+ // Travel return: the game's timeline continued past every receipt, so all are restored (also undated ones).
+ const returned = {people: {}};
+ assert.equal(R.mergeProcessed(returned, mirror, {minute: 1200, continuous: true}), 5);
+});
+
 // The running mod: a managed Zoi's hope finishes between two household cycles.
 function appHarness(execute) {
  const elements = new Map(), intervals = new Map();

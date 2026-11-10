@@ -101,12 +101,13 @@
   });
   Object.keys(mine).forEach(function(k){
    var record=missions&&missions['(Value='+k+')'], w=mine[k];
-   if(record&&record.bIsFinished){
+   if(record&&record.bIsFinished&&!w.done){
+    // The mark stays on the watched hope while the game still lists it, so it cannot be counted again.
+    w.done=true;
     if(event(state,{minute:minute,zoi:zoi,kind:'hope_completed',key:k,name:w.name,evidence:'mission'}))settled.push({name:w.name,outcome:'completed'});
-    delete mine[k];
-    return;
    }
    if(live[k])return;
+   if(w.done){delete mine[k];return;}
    // Left the list. Without the mission record nothing is concluded yet; ask again next time.
    if(!missions)return;
    var reason=Number.isFinite(w.expire)&&minute>=w.expire?'expired':'unverified';
@@ -115,9 +116,44 @@
   });
   return settled;
  }
+ // Requests, failures, blocks, outings and finished ambition missions, read from what the mod already remembers.
+ // Each fact has a key, so looking again never counts it twice.
+ function memory(state,minute,id,p){
+  var goals=p.goalMemory||{};
+  Object.keys(goals).forEach(function(k){
+   // What was already counted is marked on the record itself, so the mark lives exactly as long as the
+   // record can be read again. (A bounded key table would forget old marks and count the same fact twice.)
+   var item=goals[k], done=item.scored||(item.scored={blocks:{},fails:{}});
+   if(item.kind==='ambition'&&item.phase==='completed'&&!done.completed){
+    done.completed=true;
+    event(state,{minute:minute,zoi:id,kind:'ambition_completed',name:item.name,evidence:'mission'});
+   }
+   var kind=item.phase==='unsupported'?'unsupported':item.block&&item.block.kind;
+   if(kind&&!done.blocks[kind]){
+    done.blocks[kind]=true;
+    event(state,{minute:minute,zoi:id,kind:'blocked',name:item.name,reason:kind});
+   }
+   var failures=item.failures||{};
+   Object.keys(failures).forEach(function(f){
+    var count=failures[f].count||0, counted=done.fails[f]||0;
+    for(var n=counted;n<count;n++)event(state,{minute:minute,zoi:id,kind:'failed',name:item.name});
+    done.fails[f]=count;
+   });
+   Object.keys(done.fails).forEach(function(f){if(!failures[f])delete done.fails[f];});
+  });
+  if(p.goal&&p.goal.sentAt&&!p.goal.scored){
+   p.goal.scored=true;
+   event(state,{minute:minute,zoi:id,kind:'request',name:p.goal.name});
+  }
+  if(p.outing&&p.outing.goalVisit){
+   if(!p.outing.scored){p.outing.scored=true;event(state,{minute:minute,zoi:id,kind:'outing',name:p.outing.name});}
+   if(p.outing.found&&!p.outing.scoredFound){p.outing.scoredFound=true;event(state,{minute:minute,zoi:id,kind:'outing_found',name:p.outing.name});}
+  }
+ }
  // Has the list changed since the last look? Lets the caller read the mission record only when needed.
  function hopesChanged(state,zoi,names){
   var s=book(state), mine=(s.hopes||{})[String(zoi)]||{};
+  // Hopes already settled but still listed are part of the known list.
   var known=Object.keys(mine).map(function(k){return mine[k].name;}).sort().join('|');
   return known!==(names||[]).slice().sort().join('|');
  }
@@ -165,7 +201,7 @@
   });
   return out;
  }
- var api={TARGET:TARGET,event:event,observe:observe,hopes:hopes,hopesChanged:hopesChanged,summary:summary,line:line,report:report,dayOf:dayOf};
+ var api={TARGET:TARGET,memory:memory,event:event,observe:observe,hopes:hopes,hopesChanged:hopesChanged,summary:summary,line:line,report:report,dayOf:dayOf};
  if(typeof module!=='undefined'&&module.exports)module.exports=api;
  else root.ObserverScoreboard=api;
 })(this);

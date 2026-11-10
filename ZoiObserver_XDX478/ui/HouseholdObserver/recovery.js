@@ -116,9 +116,13 @@
    background:state.background,awayTravel:state.awayTravel||null,travel:state.travel?{stage:state.travel.stage,actor:state.travel.actor,
    destination:state.travel.destination,origin:state.travel.origin,day:state.travel.day}:null,people:people};
  }
- // Merge processed payments and replies back so a reloaded older save cannot pay twice.
- function mergeProcessed(state,mirror){
-  var merged=0;
+ // Merge processed payments and replies back so a state older than the game's own timeline cannot pay twice
+ // (travel: the city's saved mod state is older than what the game already did).
+ // A receipt made later in game time than the loaded moment belongs to a timeline the player discarded by
+ // loading an earlier save: there the bill is unpaid again and the message unanswered, so it is not restored.
+ // Receipts without a game minute (written before 0.5.3) are restored only when the timeline is known to continue.
+ function mergeProcessed(state,mirror,context){
+  var merged=0, now=context&&context.minute, continuous=!!(context&&context.continuous);
   if(!mirror||!mirror.people)return 0;
   state.people=state.people||{};
   Object.keys(mirror.people).forEach(function(id){
@@ -126,7 +130,11 @@
    ['payments','replyRequests'].forEach(function(field){
     if(!source[field])return;
     target[field]=target[field]||{};
-    Object.keys(source[field]).forEach(function(k){if(!target[field][k]){target[field][k]=source[field][k];merged++;}});
+    Object.keys(source[field]).forEach(function(k){
+     var made=source[field][k]&&source[field][k].minute;
+     if(context&&(Number.isFinite(made)?!(made<=now):!continuous))return;
+     if(!target[field][k]){target[field][k]=source[field][k];merged++;}
+    });
    });
   });
   return merged;

@@ -836,33 +836,9 @@
       x.outcome==='expired'?': 소망 기한 만료 / ':': 소망이 목록에서 빠짐 · 완료 기록 없음 / ')+x.name);
     });
    }
-   scoreMemory(id,p,minute);
+   Score.memory(state,minute,id,p);
   }catch(e){
    if(cache['score:'+id]!==e.message){cache['score:'+id]=e.message;log(m.first_name+': 성적표 기록 보류 - '+e.message);}
-  }
- }
- // Requests, failures, blocks, outings and finished ambition missions, read from what the mod already remembers.
- // Each fact has a key, so looking again never counts it twice.
- function scoreMemory(id,p,minute){
-  var memory=p.goalMemory||{};
-  Object.keys(memory).forEach(function(k){
-   var item=memory[k], base=String(item.instance)+':'+item.name;
-   if(item.kind==='ambition'&&item.phase==='completed')
-    Score.event(state,{minute:minute,zoi:id,kind:'ambition_completed',key:base,name:item.name,evidence:'mission'});
-   if(item.block&&item.block.kind)
-    Score.event(state,{minute:minute,zoi:id,kind:'blocked',key:base+':'+item.block.kind,name:item.name,reason:item.block.kind});
-   if(item.phase==='unsupported')
-    Score.event(state,{minute:minute,zoi:id,kind:'blocked',key:base+':unsupported',name:item.name,reason:'unsupported'});
-   Object.keys(item.failures||{}).forEach(function(f){
-    Score.event(state,{minute:minute,zoi:id,kind:'failed',key:base+':'+f+':'+item.failures[f].count,name:item.name});
-   });
-  });
-  if(p.goal&&p.goal.sentAt)
-   Score.event(state,{minute:minute,zoi:id,kind:'request',key:String(p.goal.instance)+':'+p.goal.bag+':'+p.goal.sentAt,name:p.goal.name});
-  if(p.outing&&p.outing.goalVisit){
-   var trip=String(p.outing.site)+':'+p.outing.start;
-   Score.event(state,{minute:minute,zoi:id,kind:'outing',key:trip,name:p.outing.name});
-   if(p.outing.found)Score.event(state,{minute:minute,zoi:id,kind:'outing_found',key:trip,name:p.outing.name});
   }
  }
  function daily(time,id,p){
@@ -976,7 +952,7 @@
     pendingResume=false;
     var mirror=await loadMirror(), resume=R.resumeDecision(state,mirror,household,lastGame,Date.now());
     if(resume){
-     var merged=R.mergeProcessed(state,mirror);
+     var merged=R.mergeProcessed(state,mirror,{minute:gameMinute(time),continuous:!!(resume.returning||resume.awayTravel)});
      if(merged)log('이전 진행에서 처리한 납부·답장 기록 '+merged+'건 복원 · 중복 처리 방지');
      if(resume.awayTravel&&!state.awayTravel)state.awayTravel=resume.awayTravel;
      if(resume.returning&&!state.awayTravel)state.awayTravel=mirror.awayTravel;

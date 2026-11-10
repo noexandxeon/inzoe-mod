@@ -491,7 +491,7 @@
       }
       if(best){
        replyRequests[key]={thread:item.key,system:item.system,messageId:message.messageId,timestamp:message.timestamp,
-        phase:'requested',sender:name,choice:C.clean(best.button.text)};
+        phase:'requested',sender:name,choice:C.clean(best.button.text),minute:minute};
        sent=await click(best.button,token,id);
        if(sent)await wait(350);
        else{
