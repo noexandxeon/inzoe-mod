@@ -36,6 +36,11 @@
    if(!sites||sites.map_id!==city)sites=await cli('world.get_loaded_sites');
    return sites.sites||[];
   }
+  var siteMemory={};
+  function knowsSite(location){
+   var seen=siteMemory[api.game().map_id+':'+location];
+   return !!seen&&Date.now()-seen.at<20*60000;
+  }
   async function inventory(member,character){
    var game=api.game(), location=entity(character.locatedSiteId);
    if(!(location>0))return null;
@@ -43,7 +48,9 @@
    if(homeCache[key]&&Date.now()-homeCache[key].at<10000)return homeCache[key];
    if(String(game.possessed_entity_id)!==String(member.entity_id)){
     var active=await readAt(game.possessed_entity_id);
-    if(entity(active.locatedSiteId)!==location)return null;
+    // 0.5.8: an unselected Zoi somewhere else uses what was last seen at that place (20 real minutes);
+    // each action is still checked against the game before it is requested.
+    if(entity(active.locatedSiteId)!==location)return knowsSite(location)?Object.assign({},siteMemory[key],{remembered:true}):null;
    }
    var site=(await currentSites()).find(function(s){return s.entity_id===location;});
    if(!site)return null;
@@ -53,7 +60,7 @@
    if(summary.site_id!==site.id)return null;
    var scan=await cli('build.scan_objects',{Limit:0});
    if(!Array.isArray(scan.objects)||scan.total!==scan.objects.length)return null;
-   return homeCache[key]={at:Date.now(),site:site,summary:summary,objects:scan.objects};
+   return siteMemory[key]=homeCache[key]={at:Date.now(),site:site,summary:summary,objects:scan.objects};
   }
   function closest(objects,character,pattern,limit){
    var position=character.worldTransform&&character.worldTransform.translation;
@@ -1454,13 +1461,17 @@
   }
   async function siteObjects(member,character){
    var local=await inventory(member,character);
-   return local?closest(local.objects,character,/./,12):[];
+   if(!local)return [];
+   // Counters, registers and signs first, then whatever is nearest: the opening action sits on shop fixtures.
+   var fixtures=closest(local.objects,character,/Counter|Cashier|Register|Kiosk|Pos(?:[_\d]|$)|Sign|Board|Shop|Store|Biz/i,12);
+   var near=closest(local.objects,character,/./,12).filter(function(o){return fixtures.indexOf(o)<0;});
+   return fixtures.concat(near);
   }
-  function reset(){sites=null;householdCache={};homeCache={};houseTasks={};repairs={};}
+  function reset(){siteMemory={};sites=null;householdCache={};homeCache={};houseTasks={};repairs={};}
   return {reset:reset,needs:needs,routine:routine,clean:clean,repair:repair,parcels:parcels,marketNeed:marketNeed,reviewGoal:reviewGoal,trackGoal:trackGoal,prepareGoals:prepareGoals,attend:attend,
    pursueHope:pursueHope,prepareAmbition:prepareAmbition,pursueAmbition:pursueAmbition,
    affection:affection,goalConversation:goalConversation,meetForGoal:meetForGoal,
-   occupation:occupation,sideIncome:sideIncome,outing:outing,socialOuting:socialOuting,ensureTraining:ensureTraining,vacation:vacation,householdPlan:householdPlan,furnish:furnish,move:move,home:homeMember,computers:computers,siteObjects:siteObjects,objectAction:objectAction};
+   occupation:occupation,sideIncome:sideIncome,outing:outing,socialOuting:socialOuting,ensureTraining:ensureTraining,vacation:vacation,householdPlan:householdPlan,furnish:furnish,move:move,home:homeMember,computers:computers,siteObjects:siteObjects,objectAction:objectAction,knowsSite:knowsSite};
  }
  root.ObserverLifeActions={create:create};
 })(this);

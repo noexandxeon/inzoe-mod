@@ -793,9 +793,10 @@
    await write('ui.click',{ref:chosen.ref,Force:background(),hold_ticks:2},token,':talk',id);
    log('관계 선택 대화 응답 요청 / '+C.clean(chosen.text));
   }
+  function borrowing(){return !!(phoneReturn||phonePanel);}
   function reset(){news=null;nextNews=0;orders={};choiceAt=0;phoneReturn=null;phonePanel=null;lastCall=null;}
   return {reset:reset,preference:preference,phone:phone,restorePhoneActor:restorePhoneActor,market:market,catShop:catShop,choiceCard:choiceCard,answerCall:answerCall,relationshipChoice:relationshipChoice,
-   readNews:readNews,latestNews:function(){return news;}};
+   readNews:readNews,latestNews:function(){return news;},borrowing:borrowing};
  }
  root.ObserverPanels={create:create};
 })(this);

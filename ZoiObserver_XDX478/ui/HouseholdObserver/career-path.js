@@ -60,6 +60,8 @@
  // Remembered per Zoi in decision.careerPath; the path is kept for 14 game days unless the ambition changes.
  function plan(book,ctx){
   var ambitionKey=ctx.ambition&&ctx.ambition.id||'';
+  // An earlier save was loaded: life events from the discarded future do not carry over.
+  if(book.day>ctx.day){book.retired=false;book.leftJob=null;book.pending=null;book.solo=null;book.jobless=undefined;book.shortSince=undefined;book.tries={};book.foundingBlocked=false;book.note=null;}
   if(!book.path||book.day>ctx.day||ctx.day-(book.chosenDay||0)>=14||book.focus!==ambitionKey&&ambitionKey){
    var c=choosePath(ctx.traits,ctx.skills,ctx.ambition,ctx.id);
    if(book.path!==c.path)book.changed=ctx.day;
@@ -230,7 +232,9 @@
   async function leave(member,character,decision,minute,token){
    var book=decision.careerPath, name=member.first_name||String(member.entity_id);
    if(book.pending||!open(book,'leave',minute))return false;
+   var reach=(await api.computers(member,character)).length>0;
    var action=await request(member,character,LEAVE,['Quit','Resign','Retire','Career'],token);
+   if(!action&&!reach){book.note='컴퓨터를 쓸 수 있을 때 다시 확인';return false;}
    if(!action){missed(book,'leave',minute,name,'게임이 제공하는 퇴사·은퇴 행동을 찾지 못함 · 직장 유지');return false;}
    book.pending={kind:'leave',step:book.step,why:book.why,at:minute,bag:action.interaction_bag_id};
    log(name+': '+(book.step==='retire'?'은퇴':'퇴사')+' 결정 — '+book.why+' ('+(action.display_name||action.interaction_bag_id)+')');
@@ -240,8 +244,11 @@
    var book=decision.careerPath, name=member.first_name||String(member.entity_id);
    if(book.pending||book.foundingBlocked)return false;
    if(!open(book,'found',minute)){book.foundingBlocked=true;return false;}
+   // Without a computer in reach nothing was really tried: wait for one instead of giving up on founding.
+   var reach=(await api.computers(member,character)).length>0;
    var action=await request(member,character,FOUND,['Business','Biz','Shop'],token);
    if(!action){
+    if(!reach){book.note='창업 준비: 컴퓨터를 쓸 수 있을 때 다시 확인';return false;}
     attemptState(book,'found').count=2;book.foundingBlocked=true;
     book.note='사업장 창업 행동을 찾지 못함 · 1인 사업으로 전환';
     log(name+': '+book.note);
