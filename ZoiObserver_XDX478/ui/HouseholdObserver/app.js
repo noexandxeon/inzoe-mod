@@ -1,6 +1,6 @@
 (function () {
  'use strict';
- var VERSION='0.6.1', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.6.2', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var A=ObserverAgenda, R=ObserverRecovery, Rel=ObserverRelations, M=ObserverGoalMemory;
  var ChildCare=ObserverChildCare, Score=ObserverScoreboard, CP=ObserverCareerPath, Persona=ObserverPersona, Rot=ObserverRotation, Field=ObserverFieldCheck, Family=ObserverFamily, Why=ObserverWhy;
  var claims=Family.create(), nowMinute=NaN, popupTrack=null, expectedSelected=null, lastSelected=null;
@@ -11,7 +11,7 @@
  var caps={}, snapshots={}, lastCycle=0, popupRows={}, lastPopup=null, blockedPopup=null;
  var popupTries=0, nextPopupTry=0, checkingPopup=false, watching=false, calendar=null;
  var playedGroups=[], rosterAt=0, rosterMap='';
- var scheduleCancel=null;
+ var scheduleCancel=null, nextPeriodicSave=0;
  var receiptSerial=0;
  var lastPendingPoll=0, queueSampleAt={};
  var pausedUntil=0, firstError=0, pendingResume=true, lastMirror=0, mirrorStopped=false;
@@ -84,7 +84,7 @@
   '<p class="help" id="data-status"></p><p class="help">창 복구 Ctrl+Shift+O</p>'+
   '<p class="help"><button id="background" aria-pressed="true"></button><span id="mode-note"></span></p>'+
   '<p class="help"><button id="rotate" aria-pressed="true"></button><span id="rotate-note"></span></p>'+
-  '<p class="help" id="unattended"></p><div id="people"></div><p id="news"></p><p class="limit">욕구·수리·택배·소망 / 소식·일정 / 취향·관계</p>'+
+  '<p class="help" id="unattended"></p><p class="help" id="periodic-report"></p><div id="people"></div><p id="news"></p><p class="limit">욕구·수리·택배·소망 / 소식·일정 / 취향·관계</p>'+
   '<div id="log"></div>';
  function log(message){
   var d=new Date(), pad=function(n){return ('0'+n).slice(-2);};
@@ -180,6 +180,9 @@
   var news=panels.latestNews();
   var houseLine=Number.isFinite(nowMinute)?Score.houseLine(state,Score.dayOf(nowMinute)):'';
   document.getElementById('unattended').textContent=houseLine;
+  var period=state.periodicScore;
+  document.getElementById('periodic-report').textContent=!state.enabled||!period?'':period.pending?
+   '15일 자동 리포트 저장 대기':'다음 15일 자동 리포트 · '+(period.fromDay+Score.PERIOD_DAYS)+'일 00:00';
   document.getElementById('news').textContent=news?'소식함 '+news.entries.length+'건 확인'+
    (news.events.length?' · 현재 행사 '+news.events.map(function(e){return e.title;}).join(', '):''):'';
   var el=document.getElementById('log');el.textContent=logs.slice(-35).join('\n');el.scrollTop=el.scrollHeight;
@@ -379,6 +382,25 @@
   var payload={why:why,fieldCheck:state.fieldCheck||null,rotation:state.rotation||null,score:Score.report(state),gameData:gameData.summary(),queueSample:state.queueSample||null,execTrail:state.execTrail||[],daily:state.daily||{},lastReturn:state.lastReturn||null,version:VERSION,created:new Date().toISOString(),enabled:state.enabled,scope:state.scope,background:state.background,household:state.household,status:status,game:lastGame,popup:blockedPopup,travel:state.travel,awayTravel:state.awayTravel,news:panels.latestNews(),members:members,snapshots:snapshots,decisions:state.people,capabilities:caps,logs:logs,last_cycle:lastCycle};
   await cli('uimod.cfg_save',{mod_id:wf.MOD_ID,section:'ui/'+wf.APP_NAME+'/saved',key:manual?'observer-report':'observer-auto',value:JSON.stringify(payload)});
   lastReport=Date.now();return payload;
+ }
+ async function savePeriodicReport(token){
+  if(!state.enabled||epoch!==token||Date.now()<nextPeriodicSave)return;
+  var pending=Score.dueReport(state,nowMinute,state.scope,state.household,Date.now());
+  if(!pending)return;
+  nextPeriodicSave=Date.now()+60000;
+  var names={};
+  members.forEach(function(m){names[String(m.entity_id)]=[m.last_name,m.first_name].filter(Boolean).join(' ');});
+  var payload={version:VERSION,created:new Date().toISOString(),scope:state.scope,household:state.household,
+   period:pending.range,score:pending.score,names:names,
+   currentPopup:popupTrack?{key:popupTrack.key,seconds:Math.round((Date.now()-popupTrack.since)/1000)}:null};
+  try{
+   await cli('uimod.cfg_save',{mod_id:wf.MOD_ID,section:'ui/'+wf.APP_NAME+'/saved',key:pending.key,value:JSON.stringify(payload)});
+   if(epoch!==token)return;
+   Score.reportSaved(state,pending);
+   log('15일 자동 리포트 저장 / '+pending.key+'.cfg');
+  }catch(e){
+   log('15일 자동 리포트 저장 보류 · 1분 후 재시도 / '+e.message);
+  }
  }
  async function answerPopup(token,game){
   var blocking=game.blocking||{};
@@ -1077,6 +1099,7 @@
    }
    members=await roster(household,lastGame.map_id);
    await answerPopup(token,lastGame);
+   await savePeriodicReport(token);
    var sim=await cli('environment.get_simulation');
    if(sim.is_paused){
     status=blockedPopup&&blockedPopup.length?'팝업 대기: '+(blockedPopup[0].popup_id||'이름 없음'):'게임 일시정지 중';
@@ -1203,7 +1226,7 @@
   lastPendingPoll=0;queueSampleAt={};
   lastPopup=null;blockedPopup=null;popupTries=0;nextPopupTry=0;scheduleCancel=null;
   life.reset();panels.reset();care.reset();gathering.reset();vocation.reset();claims.reset();popupTrack=null;lastSelected=null;expectedSelected=null;
-  pendingResume=true;pausedUntil=0;errors=0;firstError=0;
+  pendingResume=true;pausedUntil=0;errors=0;firstError=0;nextPeriodicSave=0;
   log('저장된 관찰 설정을 불러왔습니다. 목표와 현재 게임 상태를 다시 확인합니다.');
  };
  log(VERSION+' 준비. 다른 작업 모드와 행동 결과를 확인합니다.');

@@ -340,7 +340,7 @@ test('payments and replies handled after the last save are merged back, never re
  assert.equal(state.people['1'].replyRequests.r.phase, 'outgoing');
 });
 
-function appHarness(execute) {
+function appHarness(execute, beforeSave) {
  const elements = new Map(), intervals = new Map(), saved = {};
  const element = () => ({style:{}, addEventListener(){}, appendChild(){}, setAttribute(){}, scrollHeight:0, textContent:'', innerHTML:''});
  let deliver, trigger, shows=0;
@@ -348,7 +348,7 @@ function appHarness(execute) {
   document:{body:element(), getElementById:id => {if (!elements.has(id)) elements.set(id, element()); return elements.get(id);},
    createElement:element, addEventListener(){}},
   inzoi:{cli:{execute:(name, args) => {
-   if (name === 'uimod.cfg_save') {saved[args.key] = args.value; return {success:true};}
+   if (name === 'uimod.cfg_save') {if (beforeSave) beforeSave(args); saved[args.key] = args.value; return {success:true};}
    if (name === 'uimod.cfg_load') return saved[args.key] ? {value:saved[args.key]} : {value:null};
    return execute(name, args);
   }}, view:{show(){shows++;}}, trigger:{onActivated:fn=>trigger=fn}, saveState:{register(){}, onLoad:fn => deliver = fn}},
@@ -358,6 +358,54 @@ function appHarness(execute) {
   vm.runInContext(fs.readFileSync(path.join(ui, name + '.js'), 'utf8'), context, {filename:name + '.js'});
  return {context, intervals, saved, elements, load:value => deliver(JSON.stringify(value)), trigger:event=>trigger(event), shows:()=>shows};
 }
+test('the game loop saves one 15-day archive, retries a failed write and preserves the usual reports', async () => {
+ let day=0, now=1000000, writes=[], failed=false;
+ const h=appHarness(name=>{
+  if(name==='game.get_state')return {phase:'in_game',map_id:'Cahaya_Map',possessed_entity_id:1,blocking:{}};
+  if(name==='environment.get_time')return {day,hour:0,minute:0};
+  if(name==='environment.get_simulation')return {is_paused:true};
+  if(name==='household.get_members')return {household_id:11,members:[{entity_id:1,first_name:'가',household_id:11}]};
+  return {};
+ },args=>{
+  if(!args.key.startsWith('observer-15d-'))return;
+  writes.push(args.key);
+  assert.match(args.section,/\/saved$/);
+  if(!failed){failed=true;throw Error('temporary save failure');}
+ });
+ h.context.Date=class extends Date {static now(){return now;}};
+ h.load({schema:1,enabled:true,household:11,people:{}});
+ const cycle=h.intervals.get(10000), S=h.context.ObserverScoreboard, state=h.context.wf.state;
+ const observe=(d)=>S.observe(state,d*1440+12,1,{stats:{}},now);
+ await cycle();
+ observe(0);
+ for(day=1;day<=15;day++){
+  if(day!==4)observe(day);
+  S.event(state,{minute:day*1440+20,zoi:1,kind:'blocked',reason:'skill'});
+ }
+ day=15;
+ await cycle();
+ assert.equal(writes.length,0);
+ day=16;
+ now+=60000;
+ await cycle();
+ assert.equal(writes.length,1);
+ assert.equal(h.saved[writes[0]],undefined);
+ await cycle();
+ assert.equal(writes.length,1);
+ now+=60001;
+ await cycle();
+ assert.deepEqual(writes,[writes[0],writes[0]]);
+ const report=JSON.parse(h.saved[writes[0]]);
+ assert.equal(report.period.fromDay,1);
+ assert.equal(report.period.toDayExclusive,16);
+ assert.deepEqual(report.period.daysWithoutObservations,[4]);
+ assert.equal(report.period.people[0].observedDays,14);
+ assert.equal(report.period.people[0].blockers[0].records,15);
+ assert.equal(Object.keys(report.score.days).length,15);
+ assert.ok(h.saved['observer-auto']);
+ await cycle();
+ assert.equal(writes.length,2);
+});
 test('the quick observer sees a different household member start and finish a goal without issuing a command', async () => {
  const calls=[], start=Date.now(), adult={entity_id:1,first_name:'가',household_id:11,age_group:'Adult'};
  const second={...adult,entity_id:2,first_name:'나'};
