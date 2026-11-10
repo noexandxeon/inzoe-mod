@@ -32,6 +32,51 @@
   var keys=Object.keys(s.seen);
   if(keys.length>MAX_SEEN)keys.sort(function(a,b){return s.seen[a]-s.seen[b];}).slice(0,keys.length-MAX_SEEN).forEach(function(k){delete s.seen[k];});
  }
+ // 0.6.0 (3) Household-level facts for the unattended run: how often a person had to step in, how popups
+ // were dealt with and how long they blocked the game, and payments that went out twice.
+ function houseOf(state,minute){
+  var s=book(state), key=String(dayOf(minute)), day=s.days[key]||(s.days[key]={people:{},events:[]});
+  return day.house||(day.house={popups:0,popupAuto:0,popupUser:0,popupStall:0,popupLongest:0,stops:0,selections:0,duplicates:0});
+ }
+ // kind: popup {auto,seconds} | stop | selection | duplicate
+ function house(state,minute,kind,info){
+  if(!Number.isFinite(minute))return false;
+  var h=houseOf(state,minute);
+  if(kind==='popup'){
+   var seconds=Math.max(0,Math.round(info&&info.seconds||0));
+   h.popups++;
+   if(info&&info.auto)h.popupAuto++;else h.popupUser++;
+   h.popupStall+=seconds;
+   if(seconds>h.popupLongest)h.popupLongest=seconds;
+  }else if(kind==='stop')h.stops++;
+  else if(kind==='selection')h.selections++;
+  else if(kind==='duplicate')h.duplicates++;
+  else return false;
+  return true;
+ }
+ // The unattended criterion over the last `days` game days: no manual step, no duplicate payment,
+ // no popup left blocking for more than two real minutes.
+ function unattended(state,today,days){
+  var s=book(state), out={days:0,interventions:0,duplicates:0,popups:0,popupAuto:0,stalls:0,longest:0};
+  for(var d=today-(days||7)+1;d<=today;d++){
+   var day=s.days[String(d)], h=day&&day.house;
+   if(!day)continue;
+   out.days++;
+   if(!h)continue;
+   out.interventions+=h.popupUser+h.stops+h.selections;
+   out.duplicates+=h.duplicates;out.popups+=h.popups;out.popupAuto+=h.popupAuto;
+   if(h.popupLongest>120)out.stalls++;
+   if(h.popupLongest>out.longest)out.longest=h.popupLongest;
+  }
+  out.pass=out.days>=(days||7)&&out.interventions===0&&out.duplicates===0&&out.stalls===0;
+  return out;
+ }
+ function houseLine(state,today){
+  var u=unattended(state,today,7);
+  if(!u.days)return '';
+  return '무인 운영 '+u.days+'/7일 · 개입 '+u.interventions+' · 팝업 자동 '+u.popupAuto+'/'+u.popups+
+   (u.longest?' (최장 '+u.longest+'초)':'')+' · 중복 결제 '+u.duplicates+(u.pass?' · 기준 충족':'');
+ }
  // Returns false when the same fact was already recorded (same key), so nothing is counted twice,
  // also after a save is loaded again.
  function event(state,e){
@@ -197,11 +242,11 @@
   var s=book(state), out={target:TARGET,days:{}};
   Object.keys(s.days).forEach(function(key){
    var d=s.days[key];
-   out.days[key]={people:Object.keys(d.people).map(function(id){return summary(state,Number(key),id);}),events:d.events};
+   out.days[key]={people:Object.keys(d.people).map(function(id){return summary(state,Number(key),id);}),events:d.events,house:d.house||null};
   });
   return out;
  }
- var api={TARGET:TARGET,memory:memory,event:event,observe:observe,hopes:hopes,hopesChanged:hopesChanged,summary:summary,line:line,report:report,dayOf:dayOf};
+ var api={house:house,unattended:unattended,houseLine:houseLine,TARGET:TARGET,memory:memory,event:event,observe:observe,hopes:hopes,hopesChanged:hopesChanged,summary:summary,line:line,report:report,dayOf:dayOf};
  if(typeof module!=='undefined'&&module.exports)module.exports=api;
  else root.ObserverScoreboard=api;
 })(this);

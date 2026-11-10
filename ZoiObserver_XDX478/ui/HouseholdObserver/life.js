@@ -132,6 +132,21 @@
   });
   return checkpoint;
  }
+ // How many new ledger lines match one payment: 2 or more means it went out twice.
+ function debitCount(wallet,checkpoint,actor,amount,reason){
+  var days=ledgerDays(wallet);
+  if(!days||!checkpoint||!reason)return 0;
+  var latest=Object.keys(checkpoint).sort().pop(), count=0;
+  Object.keys(days).sort().forEach(function(day){
+   var records=days[day].records||[], before=checkpoint[day];
+   if(before&&(records.length<before.count||before.count&&ledgerRecordKey(records[before.count-1])!==before.last))return;
+   if(!before&&latest&&day<=latest)return;
+   records.slice(before?before.count:0).forEach(function(r){
+    if(r.amount===-amount&&r.transactionReason===reason&&String(r.participantId&&r.participantId.value)===String(actor))count++;
+   });
+  });
+  return count;
+ }
  function matchingDebit(wallet,checkpoint,actor,amount,reason){
   var days=ledgerDays(wallet);
   if(!days||!checkpoint||!reason)return null;
@@ -288,7 +303,7 @@
 
  var api={itemForTag:itemForTag,tripReady:tripReady,objectHints:objectHints,QUEUE_LIMIT:QUEUE_LIMIT,TRAVEL:TRAVEL,adultAge:adultAge,goalVenueIds:goalVenueIds,goalReady:goalReady,urgentNeed:urgentNeed,routineNeed:routineNeed,goalHomeItem:goalHomeItem,relaxed:relaxed,fixtureMatches:fixtureMatches,needChoice:needChoice,goalVenueTags:goalVenueTags,
   relationshipEntry:relationshipEntry,relationshipStage:relationshipStage,hasOtherPartner:hasOtherPartner,
-  romanceChoice:romanceChoice,dayBudget:dayBudget,ledgerCheckpoint:ledgerCheckpoint,matchingDebit:matchingDebit,
+  romanceChoice:romanceChoice,dayBudget:dayBudget,ledgerCheckpoint:ledgerCheckpoint,matchingDebit:matchingDebit,debitCount:debitCount,
   entrepreneur:entrepreneur,sideJobs:sideJobs,housingChoice:housingChoice,
   leisureSite:leisureSite,noticeAllowed:noticeAllowed,hopeDeadline:hopeDeadline,expiringFirst:expiringFirst,
   sleeping:sleeping,vacationPlan:vacationPlan};

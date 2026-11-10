@@ -259,6 +259,10 @@
       wallet=await cli('entity.reflect',{entity_id:String(family.household_id),Component:'Currency'});
       balance=wallet.currencyMap&&wallet.currencyMap.mew;
       debit=L.matchingDebit(wallet,trip.ledgerBefore,member.entity_id,trip.price,'ExpenseBuy');
+      if(!debit&&L.debitCount(wallet,trip.ledgerBefore,member.entity_id,trip.price,'ExpenseBuy')>=2){
+       api.log('여행 결제가 두 번 이상 기록됨 / '+trip.price+'미유');
+       if(api.house)api.house('duplicate');
+      }
      }
      catch(_){}
      var paid=Number.isFinite(trip.balanceBefore)&&Number.isFinite(balance)&&trip.balanceBefore-balance===trip.price;
