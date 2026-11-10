@@ -545,7 +545,6 @@
     if(hint&&hint.test(site.id))score+=60;
     if(!score)continue;
     if(/TPO_Site_Public|SiteTag_Market|SiteTag_Park|CanBuySnacks|Arcade/.test(siteTags.join(' ')))score+=10;
-    if(tags.length&&!objectGoal&&score<50)continue;
     candidates.push({site:site,score:score});
    }
    candidates.sort(function(a,b){return b.score-a.score;});

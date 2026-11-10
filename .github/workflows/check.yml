@@ -13,3 +13,4 @@ jobs:
           python-version: '3.12'
       - run: node --test tests/*.test.cjs
       - run: python3 scripts/check.py
+      - run: npx --yes eslint@9 ZoiObserver_XDX478/ui/HouseholdObserver
