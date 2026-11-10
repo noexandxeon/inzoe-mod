@@ -1,6 +1,6 @@
 (function () {
  'use strict';
- var VERSION='0.6.7', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.6.8', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var A=ObserverAgenda, R=ObserverRecovery, Rel=ObserverRelations, M=ObserverGoalMemory;
  var ChildCare=ObserverChildCare, Score=ObserverScoreboard, CP=ObserverCareerPath, Persona=ObserverPersona, Rot=ObserverRotation, Field=ObserverFieldCheck, Family=ObserverFamily, Why=ObserverWhy;
  var claims=Family.create(), nowMinute=NaN, popupTrack=null, expectedSelected=null, lastSelected=null;
@@ -12,6 +12,7 @@
  var popupTries=0, nextPopupTry=0, checkingPopup=false, watching=false, calendar=null;
  var playedGroups=[], rosterAt=0, rosterMap='';
  var scheduleCancel=null, nextPeriodicSave=0;
+ var scoreStore=null;
  var receiptSerial=0;
  var lastPendingPoll=0, queueSampleAt={};
  var pausedUntil=0, firstError=0, pendingResume=true, lastMirror=0, mirrorStopped=false;
@@ -401,6 +402,7 @@
    await cli('uimod.cfg_save',{mod_id:wf.MOD_ID,section:'ui/'+wf.APP_NAME+'/saved',key:pending.key,value:JSON.stringify(payload)});
    if(epoch!==token)return;
    Score.reportSaved(state,pending);
+   await saveScoreCheckpoint(true);
    log('15일 자동 리포트 저장 / '+pending.key+'.cfg');
   }catch(e){
    log('15일 자동 리포트 저장 보류 · 1분 후 재시도 / '+e.message);
@@ -1064,6 +1066,37 @@
    return raw&&raw.v===1?raw:null;
   }catch(_){return null;}
  }
+ async function openScoreCheckpoint(token){
+  if(!state.enabled||!state.household||state.awayTravel)return;
+  var scope=state.scope, household=String(state.household), map=lastGame.map_id;
+  var key='observer-score-'+scope+'-'+household.replace(/[^a-z0-9_-]/gi,'_');
+  if(scoreStore&&scoreStore.key===key&&scoreStore.map===map)return;
+  var copy;
+  try{
+   var res=await cli('uimod.cfg_load',{mod_id:wf.MOD_ID,section:'ui/'+wf.APP_NAME+'/saved',key:key});
+   var raw=res&&res.value!=null?res.value:res;
+   copy=typeof raw==='string'?JSON.parse(raw):raw;
+  }catch(_){}
+  if(!state.enabled||epoch!==token)return;
+  if(Score.restoreCheckpoint(state,copy,nowMinute,scope,household,map,Date.now()))
+   log('같은 저장 흐름의 최근 성적표와 15일 리포트 일정 복원');
+  Score.startCheckpoint(state,Date.now());
+  scoreStore={key:key,scope:scope,household:household,map:map,at:0,busy:false};
+ }
+ async function saveScoreCheckpoint(force){
+  var store=scoreStore, at=Date.now();
+  if(!store||store.busy||!Number.isFinite(nowMinute)||!lastGame||lastGame.loading||lastGame.phase!=='in_game'||
+     state.awayTravel||store.map!==lastGame.map_id||store.scope!==state.scope||store.household!==String(state.household)||
+     !force&&at-store.at<15000)return;
+  store.at=at;store.busy=true;
+  try{
+   var payload=Score.checkpoint(state,nowMinute,store.scope,store.household,store.map);
+   await cli('uimod.cfg_save',{mod_id:wf.MOD_ID,section:'ui/'+wf.APP_NAME+'/saved',key:store.key,value:JSON.stringify(payload)});
+   delete cache.scoreCheckpoint;
+  }catch(e){
+   if(cache.scoreCheckpoint!==e.message){cache.scoreCheckpoint=e.message;log('성적표 별도 저장 보류 / '+e.message);}
+  }finally{store.busy=false;}
+ }
  // 0.6.6: at 5x speed a 10-second look is 24 game minutes apart (measured in game): the Zoi went to bed hungry and
  // woke at 0%. The look now comes round faster the faster the game runs; one look still never overlaps the next.
  var gameSpeed=1, cycleStartedAt=0;
@@ -1117,6 +1150,7 @@
     if(Date.now()-lastReport>60000)await report();
     return;
    }
+   await openScoreCheckpoint(token);
    members=await roster(household,lastGame.map_id);
    await answerPopup(token,lastGame);
    await savePeriodicReport(token);
@@ -1124,6 +1158,7 @@
    if(sim.is_paused){
     status=blockedPopup&&blockedPopup.length?'팝업 대기: '+(blockedPopup[0].popup_id||'이름 없음'):'게임 일시정지 중';
     if(Date.now()-lastReport>60000)await report();
+    if(state.enabled)await saveScoreCheckpoint();
     return;
    }
    if(state.enabled&&(!calendar||calendar.day!==time.day||calendar.city!==lastGame.map_id)){
@@ -1165,6 +1200,7 @@
    lastSelected=selectedNow;expectedSelected=null;
    errors=0;firstError=0;lastCycle=Date.now();
    if(Date.now()-lastReport>60000)await report();
+   if(state.enabled)await saveScoreCheckpoint();
    await saveMirror();
   }catch(e){
    status=String(e.message||e);log(status);
@@ -1238,6 +1274,7 @@
   mirrorStopped=true;pendingResume=false;
   if(state.enabled){Score.house(state,nowMinute,'stop');state.enabled=false;epoch++;log('자동 명령 중지.');}
   saveMirror(true);
+  saveScoreCheckpoint(true);
  };
  document.getElementById('report').onclick=function(){report(true).then(function(){log('수동 진단 저장 완료: saved/observer-report.cfg');}).catch(function(e){log('진단 저장 실패: '+e.message);});};
  window._onStateLoaded=function(){
@@ -1246,10 +1283,11 @@
   lastPendingPoll=0;queueSampleAt={};
   lastPopup=null;blockedPopup=null;popupTries=0;nextPopupTry=0;scheduleCancel=null;
   life.reset();panels.reset();care.reset();gathering.reset();vocation.reset();claims.reset();popupTrack=null;lastSelected=null;expectedSelected=null;
-  pendingResume=true;pausedUntil=0;errors=0;firstError=0;nextPeriodicSave=0;
+  pendingResume=true;pausedUntil=0;errors=0;firstError=0;nextPeriodicSave=0;scoreStore=null;
   log('저장된 관찰 설정을 불러왔습니다. 목표와 현재 게임 상태를 다시 확인합니다.');
  };
  log(VERSION+' 준비. 다른 작업 모드와 행동 결과를 확인합니다.');
+ document.getElementById('title-text').textContent='Zoi Observer '+VERSION;
  render();
  // 0.4.7: a running copy can be stopped so new script files load in place (live update, no save/load).
  var loopTimers=[setInterval(cycle,10000),setInterval(function(){if(gameSpeed>=2&&cycleDue())cycle();},1000),setInterval(watchChoice,1500)], firstCycle=setTimeout(cycle,2500);

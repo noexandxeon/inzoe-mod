@@ -260,6 +260,55 @@
   });
   return out;
  }
+ function startCheckpoint(state,now){
+  var s=book(state);
+  if(!s.runId)s.runId=String(now)+'-'+Math.random().toString(36).slice(2);
+  return s;
+ }
+ function checkpoint(state,minute,scope,household,map){
+  var s=book(state), people={};
+  s.recordedAt=minute;
+  Object.keys(state.people||{}).forEach(function(id){
+   var p=state.people[id], goals={}, marks={};
+   Object.keys(p.goalMemory||{}).forEach(function(key){
+    if(p.goalMemory[key].scored)goals[key]=p.goalMemory[key].scored;
+   });
+   if(Object.keys(goals).length)marks.goals=goals;
+   if(p.goal&&p.goal.scored)marks.goal={instance:p.goal.instance,at:p.goal.sentAt,bag:p.goal.bag};
+   if(p.outing&&p.outing.scored)marks.outing={site:p.outing.site,start:p.outing.start,goalVisit:p.outing.goalVisit,found:p.outing.scoredFound};
+   if(Object.keys(marks).length)people[id]=marks;
+  });
+  return {v:1,scope:scope,household:String(household),map:map,minute:minute,score:s,period:state.periodicScore||null,people:people};
+ }
+ function restoreCheckpoint(state,copy,minute,scope,household,map,now){
+  var saved=book(state), newer=copy&&copy.score;
+  if(!copy||copy.v!==1||copy.scope!==scope||copy.household!==String(household)||copy.map!==map||
+     !newer||!newer.runId||newer.runId!==saved.runId||!newer.days||!Number.isFinite(copy.minute))return false;
+  if(minute<copy.minute){
+   // The player went back to an older point. Keep that save's history and start a separate reporting run.
+   delete saved.runId;
+   startCheckpoint(state,now);
+   return false;
+  }
+  if(saved.recordedAt>=copy.minute)return false;
+  state.score=newer;
+  newer.marks={};
+  if(copy.period&&copy.period.scope===scope&&copy.period.household===String(household))state.periodicScore=copy.period;
+  Object.keys(copy.people||{}).forEach(function(id){
+   var p=state.people&&state.people[id], marks=copy.people[id];
+   if(!p)return;
+   Object.keys(marks.goals||{}).forEach(function(key){
+    if(p.goalMemory&&p.goalMemory[key])p.goalMemory[key].scored=marks.goals[key];
+   });
+   var goal=marks.goal, outing=marks.outing;
+   if(goal&&p.goal&&p.goal.instance===goal.instance&&p.goal.sentAt===goal.at&&p.goal.bag===goal.bag)p.goal.scored=true;
+   if(outing&&p.outing&&p.outing.site===outing.site&&p.outing.start===outing.start&&p.outing.goalVisit===outing.goalVisit){
+    p.outing.scored=true;
+    if(outing.found)p.outing.scoredFound=true;
+   }
+  });
+  return true;
+ }
  // Use full calendar days so neighboring reports never share a day.
  function period(state,minute,scope,household){
   var day=dayOf(minute);
@@ -318,7 +367,7 @@
    return null;
   }
   var id=String(household).replace(/[^a-z0-9_-]/gi,'_');
-  run.pending={key:'observer-15d-'+id+'-'+run.fromDay+'-'+(end-1)+'-'+now,
+  run.pending={key:'observer-15d-'+id+'-'+run.fromDay+'-'+(end-1)+'-'+scope+'-'+(book(state).runId||now),
    range:range,score:report(state,run.fromDay,end)};
   return run.pending;
  }
@@ -328,7 +377,8 @@
   run.fromDay=pending.range.toDayExclusive;
   delete run.pending;
  }
- var api={dueReport:dueReport,reportSaved:reportSaved,PERIOD_DAYS:PERIOD_DAYS,house:house,unattended:unattended,houseLine:houseLine,TARGET:TARGET,memory:memory,event:event,observe:observe,hopes:hopes,hopesChanged:hopesChanged,summary:summary,line:line,report:report,dayOf:dayOf};
+ var api={dueReport:dueReport,reportSaved:reportSaved,PERIOD_DAYS:PERIOD_DAYS,house:house,unattended:unattended,houseLine:houseLine,TARGET:TARGET,memory:memory,event:event,observe:observe,hopes:hopes,hopesChanged:hopesChanged,summary:summary,line:line,report:report,dayOf:dayOf,
+  startCheckpoint:startCheckpoint,checkpoint:checkpoint,restoreCheckpoint:restoreCheckpoint};
  if(typeof module!=='undefined'&&module.exports)module.exports=api;
  else root.ObserverScoreboard=api;
 })(this);
