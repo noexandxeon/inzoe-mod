@@ -28,10 +28,14 @@
   var active={};
   plans.forEach(function(p){active[key(p)]=true;record(decision,p,minute);});
   var memory=decision.goalMemory||{};
+  var leaving=Object.keys(memory).filter(function(id){
+   var item=memory[id];
+   return item.kind===(kind||'hope')&&!active[id]&&item.phase!=='completed'&&item.phase!=='ended'&&!(Number.isFinite(item.expire)&&minute>=item.expire);
+  }).length;
   Object.keys(memory).forEach(function(id){
    var item=memory[id];
    if(item.kind===(kind||'hope')&&!active[id]&&item.phase!=='completed'&&item.phase!=='ended'){
-    var verdict=gone(item,minute);
+    var verdict=gone(item,minute,leaving);
     item.phase=verdict.phase;item.reason=verdict.reason;item.next='새 목표 확인';
     item.history.push({minute:minute,phase:verdict.phase,reason:verdict.reason});item.history=item.history.slice(-8);
    }
@@ -41,8 +45,17 @@
    .sort(function(a,b){return memory[b].lastSeen-memory[a].lastSeen;}).slice(16).forEach(function(id){delete memory[id];});
  }
  // The game may remove or replace a hope without exposing the reason.
- function gone(item,minute){
+ // 0.6.4: in game a finished hope leaves the list together with its mission record, so the record can never
+ // show it finished (two game days: 0 counted, 9 "unverified", most of them right after the requested action).
+ // A hope whose own action was requested and that then leaves before its deadline counts as completed.
+ // Several hopes leaving at once is the game clearing the list (e.g. leaving for school), not a completion.
+ function acted(item,minute){
+  var f=item&&item.flow;
+  return !!f&&(f.step==='confirm'||f.step==='done')&&Number.isFinite(f.at)&&minute>=f.at&&minute-f.at<=240;
+ }
+ function gone(item,minute,together){
   if(Number.isFinite(item.expire)&&minute>=item.expire)return {phase:'ended',reason:'기한 만료 후 목록에서 종료'};
+  if(acted(item,minute)&&!(together>1))return {phase:'completed',reason:'요청한 행동 뒤 기한 전에 목록에서 빠짐 · 완료로 집계'};
   return {phase:'ended',reason:'게임 목록에서 종료 · 완료 여부 미확인'};
  }
  function attemptKey(bag,target){return JSON.stringify([bag,String(target||'')]);}
@@ -179,7 +192,7 @@
   if(item&&item.park&&item.park.until-minute>240)item.park=null;
   return !!(item&&item.park&&item.park.until>minute);
  }
- var api={interruption:interruption,resume:resume,chain:chain,stalled:stalled,parked:parked,gone:gone,key:key,record:record,note:note,sync:sync,allowed:allowed,failed:failed,
+ var api={interruption:interruption,resume:resume,chain:chain,stalled:stalled,parked:parked,gone:gone,acted:acted,key:key,record:record,note:note,sync:sync,allowed:allowed,failed:failed,
   practiceAllowed:practiceAllowed,practiceLimit:practiceLimit,practiceMissed:practiceMissed,practiceRan:practiceRan,started:started,flow:flow,flowText:flowText,prepare:prepare,prepared:prepared,STEP_LABELS:STEP_LABELS};
  if(typeof module!=='undefined'&&module.exports)module.exports=api;
  else root.ObserverGoalMemory=api;

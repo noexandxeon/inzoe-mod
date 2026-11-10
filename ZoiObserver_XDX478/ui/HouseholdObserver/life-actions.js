@@ -125,7 +125,10 @@
   async function needs(member,character,decision,snapshot,minute,token){
    var need=L.urgentNeed(snapshot.stats.stats);
    if(!need){
-    decision.needFallback=null;decision.needPending=null;
+    decision.needFallback=null;
+    // Kept while fresh: an early (routine) request still counts if the need turns urgent before it is eaten.
+    var kept=decision.needPending;
+    if(kept&&!(minute>=kept.minute&&minute-kept.minute<90))decision.needPending=null;
     return false;
    }
    // 0.6.4: one fix per need at a time. In game (5x speed) the 25-minute retry came round every 10 real seconds,
@@ -170,6 +173,8 @@
    var timers=decision.routineNext||(decision.routineNext={});
    if(minute<(timers[need.key]||0))return false;
    timers[need.key]=minute+120;
+   var waiting=decision.needPending;
+   if(waiting&&waiting.key===need.key&&minute>=waiting.minute&&minute-waiting.minute<90)return false;
    var home=await homeMember(member,character);
    if(!(home>0)||entity(character.locatedSiteId)!==home)return false;
    var local=await inventory(member,character);
@@ -177,6 +182,8 @@
    var eligible=local.objects.filter(function(o){return L.fixtureMatches(need.key,o.table_id);});
    var action=await objectAction(member,closest(eligible,character,/.*/,5),function(items){return L.needChoice(need.key,items);},token);
    if(!action)return false;
+   // 0.6.4: the early meal counts as the fix when the need turns urgent a moment later (in game: soup, then bibimbap 15 s on).
+   decision.needPending={key:need.key,bag:action.interaction_bag_id,target:String(action.observer_target),minute:minute,at:Date.now()};
    log(named(member)+': '+(snapshot.stats.stat_names&&snapshot.stats.stat_names[need.key]||need.key)+' '+need.pct+'% · 미리 해결 요청: '+action.display_name);
    return true;
   }
@@ -374,7 +381,13 @@
     decision.nextHopeAction=minute;
     if(ambition)decision.nextAmbition=minute;
    }else if(!ambition&&snapshot.hope&&!snapshot.hope.selected.some(function(h){return h.hope_id===goal.name;})){
-    var verdict=M.gone(M.record(decision,plan,minute),minute);
+    var listed=snapshot.hope.selected, memory0=decision.goalMemory||{};
+    var together=Object.keys(memory0).filter(function(k){
+     var it=memory0[k];
+     return it.kind==='hope'&&!/^(?:completed|ended)$/.test(it.phase)&&!(Number.isFinite(it.expire)&&minute>=it.expire)&&
+      !listed.some(function(h){return h.hope_id===it.name;});
+    }).length;
+    var verdict=M.gone(M.record(decision,plan,minute),minute,together);
     M.note(decision,plan,verdict.phase,verdict.reason,'새 목표 확인',minute);
     if(verdict.phase==='completed')M.flow(decision,plan,'done',{},minute);
     log(named(member)+(verdict.phase==='completed'?': 소망 완료 / ':': 소망 종료 / ')+goal.name+' · '+verdict.reason);

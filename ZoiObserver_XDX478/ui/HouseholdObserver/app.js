@@ -1,6 +1,6 @@
 (function () {
  'use strict';
- var VERSION='0.6.4', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.6.5', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var A=ObserverAgenda, R=ObserverRecovery, Rel=ObserverRelations, M=ObserverGoalMemory;
  var ChildCare=ObserverChildCare, Score=ObserverScoreboard, CP=ObserverCareerPath, Persona=ObserverPersona, Rot=ObserverRotation, Field=ObserverFieldCheck, Family=ObserverFamily, Why=ObserverWhy;
  var claims=Family.create(), nowMinute=NaN, popupTrack=null, expectedSelected=null, lastSelected=null;
@@ -963,8 +963,11 @@
      var instance=h.missionId&&typeof h.missionId==='object'?h.missionId.value:h.missionId;
      return {name:h.hopeId,instance:instance>0?instance:null,expire:Number.isFinite(expiry)?expiry/600000000:null};
     });
-    Score.hopes(state,minute,id,selected,missions.missionMap||null).forEach(function(x){
-     log(m.first_name+(x.outcome==='completed'?': 소망 완료 집계 (게임 미션 확인) / ':
+    Score.hopes(state,minute,id,selected,missions.missionMap||null,function(name,instance){
+     var item=(p.goalMemory||{})['hope:'+instance+':'+name];
+     return !!item&&M.acted(item,minute);
+    }).forEach(function(x){
+     log(m.first_name+(x.outcome==='completed'?': 소망 완료 집계 (게임 미션 확인) / ':x.outcome==='acted'?': 소망 완료 집계 (요청한 행동 뒤 종료) / ':
       x.outcome==='expired'?': 소망 기한 만료 / ':': 소망이 목록에서 빠짐 · 완료 기록 없음 / ')+x.name);
     });
    }

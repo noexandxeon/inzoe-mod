@@ -66,3 +66,39 @@ test('retirement gifts and shop purchases are not leaving a job or founding a bu
   assert.equal(m(CP.FOUND, 'Computer_Use_U_BusinessPlanWriting', '창업을 위한 사업 계획서 작성하기'), true);
   assert.equal(m(CP.OPEN, 'Open_CafeBooth', '영업 시작하기'), true);
 });
+
+const M = require(path.join(ui, 'goal-memory.js'));
+const S = require(path.join(ui, 'scoreboard.js'));
+
+test('a hope that leaves right after its requested action counts as completed', () => {
+  const d = {}, plan = {kind: 'hope', instance: 148, name: 'Trait_CleanFreak_Laundry', expire_ticks: 2000 * 600000000};
+  M.record(d, plan, 1000);
+  M.flow(d, plan, 'confirm', {}, 1000);
+  assert.equal(M.gone(d.goalMemory[M.key(plan)], 1050, 1).phase, 'completed');
+  assert.equal(M.gone(d.goalMemory[M.key(plan)], 1050, 2).phase, 'ended', 'two hopes leaving together is the game clearing the list');
+  assert.equal(M.gone(d.goalMemory[M.key(plan)], 2001, 1).reason, '기한 만료 후 목록에서 종료');
+  const idle = {kind: 'hope', instance: 9, name: 'Hope_Never_Tried'};
+  M.record(d, idle, 1000);
+  assert.equal(M.gone(d.goalMemory[M.key(idle)], 1050, 1).phase, 'ended', 'no request, no completion');
+});
+
+test('the scoreboard counts that completion once and leaves cleared lists unverified', () => {
+  const state = {}, acted = name => name !== 'Hope_B';
+  S.hopes(state, 1000, 1, [{name: 'Hope_A', instance: 7, expire: 3000}], {}, acted);
+  assert.deepEqual(S.hopes(state, 1050, 1, [], {}, acted), [{name: 'Hope_A', outcome: 'acted'}]);
+  assert.deepEqual(S.hopes(state, 1060, 1, [], {}, acted), []);
+  S.hopes(state, 1100, 1, [{name: 'Hope_B', instance: 8, expire: 3000}], {}, acted);
+  assert.deepEqual(S.hopes(state, 1150, 1, [], {}, acted), [{name: 'Hope_B', outcome: 'unverified'}]);
+  S.hopes(state, 1200, 1, [{name: 'Hope_C', instance: 9, expire: 3000}, {name: 'Hope_D', instance: 10, expire: 3000}], {}, acted);
+  assert.deepEqual(S.hopes(state, 1250, 1, [], {}, acted).map(x => x.outcome), ['unverified', 'unverified']);
+});
+
+test('an early meal request is remembered when hunger turns urgent', async () => {
+  const {a, calls} = actions();
+  const d = {needPending: {key: 'Hunger', bag: 'Eat_Fridge_Served_Soup', target: '8', minute: 1000, at: Date.now()}};
+  const calm = {stats: {Hunger: {pct: 28}, Toilet: {pct: 80}, Sleep: {pct: 80}, Cleanliness: {pct: 80}}};
+  assert.equal(await a.needs({entity_id: 1}, {}, d, {stats: calm, queue: {queue_count: 1, entries: null}, work: {}}, 1010, 't'), false);
+  assert.ok(d.needPending, 'kept while the need is not yet urgent');
+  assert.equal(await a.needs({entity_id: 1}, {}, d, {stats: hungry, queue: {queue_count: 1, entries: null}, work: {}}, 1020, 't'), true);
+  assert.deepEqual(calls, []);
+});

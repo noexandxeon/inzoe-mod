@@ -134,7 +134,7 @@
  // Follows the hopes the game currently lists for a Zoi. A hope that leaves the list is settled
  // from the mission record: finished → completed (once); otherwise gone, with the reason known.
  // selected: [{name,instance,expire}] · missions: the Mission component's missionMap (or null if unread).
- function hopes(state,minute,zoi,selected,missions){
+ function hopes(state,minute,zoi,selected,missions,acted){
   var s=book(state), id=String(zoi), all=s.hopes||(s.hopes={}), mine=all[id]||(all[id]={}), settled=[];
   var live={};
   (selected||[]).forEach(function(h){
@@ -146,6 +146,10 @@
     event(state,{minute:minute,zoi:zoi,kind:'offered',key:k,name:h.name});
    }
   });
+  // How many unexpired hopes leave in this look: more than one is the game clearing the list.
+  var leaving=Object.keys(mine).filter(function(k){
+   return !live[k]&&!mine[k].done&&!(Number.isFinite(mine[k].expire)&&minute>=mine[k].expire);
+  }).length;
   Object.keys(mine).forEach(function(k){
    var record=missions&&missions['(Value='+k+')'], w=mine[k];
    if(record&&record.bIsFinished&&!w.done){
@@ -158,6 +162,12 @@
    // Left the list. Without the mission record nothing is concluded yet; ask again next time.
    if(!missions)return;
    var reason=Number.isFinite(w.expire)&&minute>=w.expire?'expired':'unverified';
+   // 0.6.4: the mission record disappears with a finished hope; the mod's own request is the evidence left.
+   if(reason==='unverified'&&leaving===1&&acted&&acted(w.name,k)){
+    if(event(state,{minute:minute,zoi:zoi,kind:'hope_completed',key:k,name:w.name,evidence:'action'}))settled.push({name:w.name,outcome:'acted'});
+    delete mine[k];
+    return;
+   }
    if(event(state,{minute:minute,zoi:zoi,kind:'hope_gone',key:k,name:w.name,reason:reason}))settled.push({name:w.name,outcome:reason});
    delete mine[k];
   });
