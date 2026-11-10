@@ -1,6 +1,6 @@
 (function () {
  'use strict';
- var VERSION='0.6.2', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.6.3', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var A=ObserverAgenda, R=ObserverRecovery, Rel=ObserverRelations, M=ObserverGoalMemory;
  var ChildCare=ObserverChildCare, Score=ObserverScoreboard, CP=ObserverCareerPath, Persona=ObserverPersona, Rot=ObserverRotation, Field=ObserverFieldCheck, Family=ObserverFamily, Why=ObserverWhy;
  var claims=Family.create(), nowMinute=NaN, popupTrack=null, expectedSelected=null, lastSelected=null;
@@ -45,6 +45,7 @@
  }
  init();
  var gameData=ObserverGameData.create(cli);
+ var duty=ObserverDuty.create({cli:cli,write:write,row:gameData.row},L,R);
  var life=ObserverLifeActions.create({cli:cli,write:write,log:log,state:state,gameData:gameData,claims:claims,
   score:function(e){Score.event(state,e);},
   markAccepted:function(){receiptSerial++;},
@@ -130,6 +131,8 @@
    }
    var tally=Number.isFinite(p.lastMinute)&&Score.line(state,Score.dayOf(p.lastMinute),id);
    if(tally)html+='<p class="intent">'+esc(tally)+'</p>';
+   if(p.duty&&p.duty.summary&&p.duty.summary.total)
+    html+='<p class="intent">'+esc(ObserverDuty.label(p.duty.summary))+(p.duty.note?' · '+esc(p.duty.note):'')+'</p>';
    if(Number.isFinite(p.lastMinute))html+='<p class="help">지금: '+esc(Why.explain(p,p.lastMinute,whyContext(m,id)))+'</p>';
    if(p.goalBlock)html+='<p>막힘: '+esc(p.goalBlock)+'</p>';
    if(ChildCare.dependent(m)&&p.childCare&&p.childCare.status)html+='<p>돌봄: '+esc(p.childCare.status)+'</p>';
@@ -392,6 +395,7 @@
   members.forEach(function(m){names[String(m.entity_id)]=[m.last_name,m.first_name].filter(Boolean).join(' ');});
   var payload={version:VERSION,created:new Date().toISOString(),scope:state.scope,household:state.household,
    period:pending.range,score:pending.score,names:names,
+   duty:ObserverDuty.archive(state.people,pending.range.fromDay,pending.range.toDayExclusive),
    currentPopup:popupTrack?{key:popupTrack.key,seconds:Math.round((Date.now()-popupTrack.since)/1000)}:null};
   try{
    await cli('uimod.cfg_save',{mod_id:wf.MOD_ID,section:'ui/'+wf.APP_NAME+'/saved',key:pending.key,value:JSON.stringify(payload)});
@@ -733,6 +737,7 @@
    resetTimers(p,0);
    p.lastCareerMinute=undefined;p.idleSince=undefined;p.commutePending=false;
    p.goal=null;p.outing=null;p.scheduleChoice=null;p.lastAction=null;p.furnitureRetries={};p.wants=null;
+   if(p.duty){p.duty.pending=null;p.duty.skip=null;}
   }
   p.lastMinute=minute;
   var character=await cli('entity.reflect',args);
@@ -810,6 +815,12 @@
     }
    }
    if(care.reserved(m,members))return;
+  }
+  var urgentDutyNeed=!!L.urgentNeed(stats.stats);
+  try{if(await duty.run(m,character,p,snapshots[id],minute,token,chosen,!urgentDutyNeed)&&!urgentDutyNeed)return;}
+  catch(e){
+   var dutyKey='duty:'+id;
+   if(cache[dutyKey]!==e.message){cache[dutyKey]=e.message;log(m.first_name+': 기한 과제 확인 보류 / '+e.message);}
   }
   try{if(await life.needs(m,character,p,snapshots[id],minute,token))return;}
   catch(e){log(m.first_name+': 필수 욕구 처리 보류 - '+e.message);}
