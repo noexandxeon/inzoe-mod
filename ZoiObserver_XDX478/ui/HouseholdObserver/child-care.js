@@ -70,6 +70,15 @@
    var queue=pending.actor===String(child.entity_id)?sample.queue:await read('interaction.get_queue',pending.actor);
    var current=queue.current||{};
    if(current.interaction_bag_id===pending.bag&&String(current.target_entity_id)===String(child.entity_id))return true;
+   // The care can still be waiting behind the caregiver's current action. While it is queued the
+   // reservation holds, so a second adult is not sent to do the same thing. Bounded, in case it never runs.
+   if(api.queued&&queue.queue_count>0&&minute-pending.minute<120){
+    var waiting=await api.queued(pending.actor);
+    if((waiting||[]).some(function(entry){return entry.bag===pending.bag&&String(entry.target)===String(child.entity_id);})){
+     status(child,record,pending.label+' · 보호자의 현재 행동 뒤에서 대기 중');
+     return true;
+    }
+   }
    record.pending=null;
    record.failed={bag:pending.bag,actor:pending.actor,until:minute+35};
    record.retryAt=minute+5;

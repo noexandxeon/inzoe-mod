@@ -1,6 +1,6 @@
 (function () {
  'use strict';
- var VERSION='0.5.3', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.5.4', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var A=ObserverAgenda, R=ObserverRecovery, Rel=ObserverRelations, M=ObserverGoalMemory;
  var ChildCare=ObserverChildCare, Score=ObserverScoreboard;
  var busy=false, epoch=0, index=0, cache={}, profiles={}, rows={}, members=[], lastReport=0;
@@ -42,6 +42,13 @@
   markAccepted:function(){receiptSerial++;},
   game:function(){return lastGame;},members:function(){return members;},snapshot:function(id){return snapshots[id];},
   queued:function(id){var s=snapshots[String(id)];return s&&s.queue&&s.queue.items||[];},
+  // Counted when the request is made: a short action can finish, and its goal be cleared, before the next full look.
+  requested:function(decision,plan,minute){
+   var id=Object.keys(state.people).find(function(k){return state.people[k]===decision;});
+   if(id===undefined||!decision.goal||decision.goal.scored)return;
+   decision.goal.scored=true;
+   Score.event(state,{minute:minute,zoi:id,kind:'request',name:plan.name});
+  },
   active:function(token){return state.enabled&&token===epoch;}});
  var panels=ObserverPanels.create({cli:cli,write:write,log:log,state:state,game:function(){return lastGame;},
   background:function(){return state.background;},
@@ -49,6 +56,7 @@
  var travel=ObserverTravel.create({cli:cli,write:write,log:log,state:state,game:function(){return lastGame;},
   active:function(token){return state.enabled&&token===epoch;}},L,P);
  var care=ChildCare.create({cli:cli,write:write,log:log,move:life.move,state:state,game:function(){return lastGame;},
+  queued:async function(id){return (await readQueue(String(id))).entries;},
   active:function(token){return state.enabled&&token===epoch;}},L);
  wf.content.innerHTML='<div class="summary"><b>가구 관찰 실험판 '+VERSION+'</b><p id="status"></p></div>'+
   '<div class="buttons"><button id="start">Start</button><button id="played">Played</button><button id="stop">Stop</button><button id="report">Report</button></div>'+
