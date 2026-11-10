@@ -9,7 +9,7 @@ const globals = {
  ObserverLife: require(path.join(ui, 'life.js')), ObserverPolicy: require(path.join(ui, 'policy.js')),
  ObserverGoalMemory: require(path.join(ui, 'goal-memory.js')), ObserverChoices: require(path.join(ui, 'choices.js')),
  ObserverAgenda: require(path.join(ui, 'agenda.js')), ObserverRecovery: require(path.join(ui, 'recovery.js')),
- ObserverRelations: require(path.join(ui, 'relations.js')), ObserverGameData: require(path.join(ui, 'game-data.js')),
+ ObserverRelations: require(path.join(ui, 'relations.js')), ObserverCareerPath: require(path.join(ui, 'career-path.js')), ObserverGameData: require(path.join(ui, 'game-data.js')),
 };
 function lifeActions(api) {
  const context = vm.createContext({...globals, setTimeout: fn => { fn(); return 0; }});

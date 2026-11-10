@@ -103,7 +103,7 @@ test('game data search teaches practice for unlisted skills', async () => {
   const fs = require('node:fs'), vm = require('node:vm');
   const ctx = vm.createContext({ObserverLife: L, ObserverPolicy: require(path.join(ui, 'policy.js')),
     ObserverGoalMemory: require(path.join(ui, 'goal-memory.js')), ObserverChoices: require(path.join(ui, 'choices.js')),
-    ObserverRecovery: require(path.join(ui, 'recovery.js')), ObserverRelations: require(path.join(ui, 'relations.js')),
+    ObserverRecovery: require(path.join(ui, 'recovery.js')), ObserverRelations: require(path.join(ui, 'relations.js')), ObserverCareerPath: require(path.join(ui, 'career-path.js')),
     ObserverGameData: require(path.join(ui, 'game-data.js')), console});
   ctx.root = ctx; vm.runInContext('this.root=this;', ctx);
   vm.runInContext(fs.readFileSync(path.join(ui, 'life-actions.js'), 'utf8'), ctx);
