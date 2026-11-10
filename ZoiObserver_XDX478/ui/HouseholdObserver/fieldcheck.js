@@ -7,7 +7,7 @@
  var COMMANDS=['character.possess','entity.possess','relationships.list','relationships.get_value','contacts.get_all',
   'site.get_visitors','social_event.debug','event.list','event.describe','household_biz.can_start_day_business','game.list_saves'];
  var SHAPES=[
-  {key:'relationships.list',args:function(c){return {entity_id:c.selected};}},
+  {key:'relationships.list',args:function(c){return {owner_id:c.selected};}},
   {key:'contacts.get_all',args:function(c){return {entity_id:c.selected};}},
   {key:'site.get_visitors',args:function(c){return c.home>0?{site_entity_id:String(c.home)}:null;}},
   {key:'event.list',args:function(){return {};}}

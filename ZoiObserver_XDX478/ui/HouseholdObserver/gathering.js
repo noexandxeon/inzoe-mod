@@ -7,7 +7,8 @@
  var FRIEND=50, ROMANCE=40, WAIT=240, STAY=240;
  var INVITE=/Invite|CallOver|Call_Over|ComeOver|Come_Over|HangOutAtHome|초대|놀러\s*오|집으로\s*부르/i;
  var PARTY=/Party|파티/i;
- var NEVER=/Wedding|Funeral|Travel|Trip|Vacation|Leave|Kick|GoHome|Cancel|Quit|Stop|Decline|Reject|Refuse|Accept|Join|Attend|Visit|Fail|Feedback|_Sub_|Break|Divorce|결혼|장례|여행|데이트|취소|거절|수락|참가|보내|종료/i;
+ // 0.6.4 field check: 'Party'/'Invite' also name outfit changes, table setting, rain walks and scripted event lines.
+ var NEVER=/Outfit|Closet|Hanger|Mannequin|SetCategory|SetTable|RainWalk|RandomEvent|GroupContext|PoolParty|ComeHere|MoveToParty|Wedding|Funeral|Travel|Trip|Vacation|Leave|Kick|GoHome|Cancel|Quit|Stop|Decline|Reject|Refuse|Accept|Join|Attend|Visit|Fail|Feedback|_Sub_|Break|Divorce|결혼|장례|여행|데이트|취소|거절|수락|참가|보내|종료/i;
  // Case-sensitive on purpose: 'Friend' and 'Update' must not count as End / Date.
  var NEVER_WORD=/Date(?![a-z])|End(?![a-z])/;
  function ent(v){return v&&typeof v==='object'?Number(v.value):Number(v);}

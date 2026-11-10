@@ -125,9 +125,20 @@
   async function needs(member,character,decision,snapshot,minute,token){
    var need=L.urgentNeed(snapshot.stats.stats);
    if(!need){
-    decision.needFallback=null;
+    decision.needFallback=null;decision.needPending=null;
     return false;
    }
+   // 0.6.4: one fix per need at a time. In game (5x speed) the 25-minute retry came round every 10 real seconds,
+   // before the Zoi had reached the fridge: soup, bibimbap and noodles were queued back to back and the
+   // emergency donut was bought while the meals were still waiting.
+   var pending=decision.needPending;
+   if(pending&&pending.key===need.key&&minute>=pending.minute&&minute-pending.minute<90&&
+      (R.actionState(snapshot.queue,pending)!=='unseen'||R.awaitingStart(Date.now(),minute,pending.at,pending.minute))){
+    decision.needFallback=null;
+    if(decision.catLow&&decision.catLow[need.key]!=null)decision.catLow[need.key]=minute;
+    return true;
+   }
+   decision.needPending=null;
    if(!L.goalReady(snapshot.queue,snapshot.work)||minute<(decision.nextNeed||0)||snapshot.work.is_at_work)return false;
    decision.nextNeed=minute+25;
    var home=await homeMember(member,character), location=entity(character.locatedSiteId);
@@ -139,6 +150,7 @@
     if(action){
      if(need.key==='Hunger')decision.noMeal=0;
      decision.needFallback=null;
+     decision.needPending={key:need.key,bag:action.interaction_bag_id,target:String(action.observer_target),minute:minute,at:Date.now()};
      log(named(member)+'의 '+(snapshot.stats.stat_names[need.key]||need.key)+' 해결 요청: '+action.display_name);return true;
     }
     if(need.key==='Hunger'&&location===home)decision.noMeal=minute+40;
