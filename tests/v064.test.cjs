@@ -226,3 +226,16 @@ test('0.6.16: ambition harm goes to strangers, never to family, a romance or a s
   assert.equal(L.QUEUE_LIMIT, 6);
   assert.equal(L.routineNeed({Hunger: {pct: 46}, Toilet: {pct: 90}, Cleanliness: {pct: 90}}).key, 'Hunger');
 });
+
+test('0.6.19: the newest loan bill in a long bank thread is read, with or without a full stop', () => {
+  const C = require(path.join(ui, 'choices.js'));
+  const t = s => ({role: 'text', text: s});
+  const thread = [
+    t('1. 원금 일시상환 (당회 이자 포함)'), t('원금과 이자 모두 납부'), t('→ 총 납부액은 38,819뮤입니다.'),
+    t('2. 이자만 납부'), t('이자만 납부 후, 2일 후에 다시 문자를 드리겠습니다.'), t('→ 총 납부액은 760뮤입니다.'),
+    t('1. 원금 일시상환 (당회 이자 포함)'), t('→ 총 납부액은 39,199뮤입니다.'), t('2. 이자만 납부'), t('→ 총 납부액은 1,140뮤입니다.'),
+    t('[압류 통지]'), t('1. 원금 일시상환 (당회 이자 포함)'), t('→ 총 납부액은 39,579뮤입니다.'), t('2. 이자만 납부'), t('→ 총 납부액은 1,520뮤입니다')];
+  assert.equal(C.paymentAmount(thread, 'interest'), 1520);
+  assert.equal(C.paymentAmount(thread.slice(0, 6), 'interest'), 760);
+  assert.equal(C.paymentAmount([t('총 청구 금액 : 807 뮤'), t('총 청구 금액 : 786 뮤')], 'tax'), 786);
+});

@@ -538,6 +538,47 @@ test('the observer restores a newer scoreboard and report window from the same c
  assert.equal(earlierState.periodicScore.fromDay,5);
  assert.equal(earlierState.score.days['4'],undefined);
 });
+test('0.6.19: a live reload of the mod (empty observer state) restores the scoreboard instead of overwriting it', async () => {
+ let minute=10, now=2000000;
+ const make=()=>appHarness(name=>{
+  if(name==='game.get_state')return {phase:'in_game',map_id:'Cahaya_Map',possessed_entity_id:1,blocking:{}};
+  if(name==='environment.get_time')return {day:4,hour:10,minute};
+  if(name==='environment.get_simulation')return {is_paused:true};
+  if(name==='household.get_members')return {household_id:11,members:[{entity_id:1,first_name:'가',household_id:11}]};
+  return {};
+ });
+ const key='observer-score-current-11', active=make();
+ active.context.Date=class extends Date {static now(){return now;}};
+ active.load({schema:1,enabled:true,household:11,people:{}});
+ await active.intervals.get(10000)();
+ const S=active.context.ObserverScoreboard, state=active.context.wf.state, id=state.score.runId;
+ S.event(state,{minute:3*1440+600,zoi:1,kind:'hope_completed',key:'yesterday'});
+ minute=14;now+=17000;
+ await active.intervals.get(10000)();
+ const checkpoint=active.saved[key];
+ const reloaded=make();
+ reloaded.context.Date=active.context.Date;
+ reloaded.saved[key]=checkpoint;
+ minute=15;now+=1000;
+ reloaded.load({schema:1,enabled:true,household:11,people:{}});
+ await reloaded.intervals.get(10000)();
+ const after=reloaded.context.wf.state;
+ assert.equal(after.score.runId,id);
+ assert.equal(after.score.days['3'].people['1'].completed,1);
+});
+test('0.6.19: a newer checkpoint written in the same paused game minute is restored', () => {
+ const S=require(path.join(ui,'scoreboard.js'));
+ const state={score:{days:{},seen:{}},people:{}};
+ S.startCheckpoint(state,1);
+ const first=JSON.parse(JSON.stringify(S.checkpoint(state,600,'current',11,'M')));
+ S.event(state,{minute:600,zoi:1,kind:'hope_completed',key:'k'});
+ const second=JSON.parse(JSON.stringify(S.checkpoint(state,600,'current',11,'M')));
+ const back={score:JSON.parse(JSON.stringify(first.score)),people:{}};
+ assert.equal(S.restoreCheckpoint(back,second,600,'current',11,'M',2),true);
+ assert.equal(back.score.days['0'].people['1'].completed,1);
+ const same={score:JSON.parse(JSON.stringify(second.score)),people:{}};
+ assert.equal(S.restoreCheckpoint(same,first,600,'current',11,'M',2),false);
+});
 test('the quick observer sees a different household member start and finish a goal without issuing a command', async () => {
  const calls=[], start=Date.now(), adult={entity_id:1,first_name:'가',household_id:11,age_group:'Adult'};
  const second={...adult,entity_id:2,first_name:'나'};

@@ -256,14 +256,18 @@
    return Number.isSafeInteger(n)&&n>0?n:null;
   }
   if(kind==='interest'){
-   var interest=Array.from(labels.join(' ').matchAll(/2\.\s*이자만 납부\s*(?:→\s*)?총 납부액은\s*(\d{1,3}(?:,\d{3})+|\d+)\s*(?:미유|뮤)입니다\./g));
-   if(interest.length===1)return parse(interest[0][1]);
-   if(interest.length>1||labels.some(function(t){return t.indexOf('원금 일시상환')>=0;}))return null;
+   // 0.6.19: the bank thread keeps every earlier bill, so several amounts are on screen and the reply buttons
+   // belong to the newest one (the last). The seizure notice also ends without a full stop. Requiring exactly one
+   // amount with a full stop meant no interest was ever paid: in game six cycles ended in seizure and auction.
+   // Between "이자만 납부" and the amount the newest notice may carry one explanatory sentence.
+   var interest=Array.from(labels.join(' ').matchAll(/2\.\s*이자만 납부(?:(?!총 납부액|\d\.\s*원금)[\s\S]){0,80}?→?\s*총 납부액은\s*(\d{1,3}(?:,\d{3})+|\d+)\s*(?:미유|뮤)입니다\.?/g));
+   if(interest.length)return parse(interest[interest.length-1][1]);
+   if(labels.some(function(t){return t.indexOf('원금 일시상환')>=0;}))return null;
   }
   if(kind==='tax'){
    var totals=Array.from(labels.join(' ').matchAll(/총 청구 금액\s*[:：]?\s*(\d{1,3}(?:,\d{3})+|\d+)\s*(?:미유|뮤)(?=\s|$)/g));
-   if(totals.length===1)return parse(totals[0][1]);
-   if(totals.length>1)return null;
+   // Same as the loan: earlier bills stay in the thread; the newest one is last.
+   if(totals.length)return parse(totals[totals.length-1][1]);
   }
   var amounts=[];
   labels.forEach(function(line,index){

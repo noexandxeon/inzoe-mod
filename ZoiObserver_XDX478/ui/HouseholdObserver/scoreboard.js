@@ -268,6 +268,8 @@
  function checkpoint(state,minute,scope,household,map){
   var s=book(state), people={};
   s.recordedAt=minute;
+  // A revision tells two checkpoints apart when the game is paused and the minute does not move.
+  s.rev=(Number(s.rev)||0)+1;
   Object.keys(state.people||{}).forEach(function(id){
    var p=state.people[id], goals={}, marks={};
    Object.keys(p.goalMemory||{}).forEach(function(key){
@@ -282,15 +284,20 @@
  }
  function restoreCheckpoint(state,copy,minute,scope,household,map,now){
   var saved=book(state), newer=copy&&copy.score;
+  // 0.6.19: a fresh observer (the mod reloaded while the game kept running) has no run of its own yet.
+  // It used to refuse the checkpoint and overwrite it, losing every earlier day on each live update.
+  var fresh=!saved.runId;
   if(!copy||copy.v!==1||copy.scope!==scope||copy.household!==String(household)||copy.map!==map||
-     !newer||!newer.runId||newer.runId!==saved.runId||!newer.days||!Number.isFinite(copy.minute))return false;
+     !newer||!newer.runId||!fresh&&newer.runId!==saved.runId||!newer.days||!Number.isFinite(copy.minute))return false;
   if(minute<copy.minute){
    // The player went back to an older point. Keep that save's history and start a separate reporting run.
    delete saved.runId;
    startCheckpoint(state,now);
    return false;
   }
-  if(saved.recordedAt>=copy.minute)return false;
+  if(!fresh&&(saved.recordedAt>copy.minute||saved.recordedAt===copy.minute&&(Number(newer.rev)||0)<=(Number(saved.rev)||0)))return false;
+  // Days the fresh observer already started are kept where the checkpoint has none.
+  if(fresh)Object.keys(saved.days||{}).forEach(function(d){if(!newer.days[d])newer.days[d]=saved.days[d];});
   state.score=newer;
   newer.marks={};
   if(copy.period&&copy.period.scope===scope&&copy.period.household===String(household))state.periodicScore=copy.period;
