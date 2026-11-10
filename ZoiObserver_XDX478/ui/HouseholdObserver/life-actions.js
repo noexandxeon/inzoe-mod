@@ -70,7 +70,7 @@
     return {object:o,dist:Math.hypot(w.x-position.x,w.y-position.y,w.z-position.z)};
    }).sort(function(a,b){return a.dist-b.dist;}).slice(0,limit||5).map(function(o){return o.object;});
   }
-  async function objectAction(member,objects,choose,token,offers,schoolSite){
+  async function objectAction(member,objects,choose,token,offers,scope){
    var id=String(member.entity_id);
    for(var i=0;i<objects.length;i++){
     var target=String(objects[i].entity_id), available, self=target===id;
@@ -94,11 +94,14 @@
       !(playing&&playing.interaction_bag_id===a.interaction_bag_id&&String(playing.target_entity_id)===target);
     }),target);
     if(!action)continue;
-    if(schoolSite){
-     try{if(entity((await readAt(target)).locatedSiteId)!==schoolSite)continue;}
-     catch(_){continue;}
-     if(entity((await readAt(id)).locatedSiteId)!==schoolSite||
+    if(scope){
+     if(!scope.carried){
+      try{if(entity((await readAt(target)).locatedSiteId)!==scope.site)continue;}
+      catch(_){continue;}
+     }
+     if(entity((await readAt(id)).locatedSiteId)!==scope.site||
         !L.relaxed(await cli('interaction.get_queue',{entity_id:id})))return null;
+     if(scope.work&&(await readAt(id,'RabbitHole')).currentRabbitHoleId!=='None')return null;
     }
     var run={entity_id:id,interaction_bag_id:action.interaction_bag_id};
     // In game the Self_ action only counted with target=self (야망 2/3); without a target it queued but never ran.
@@ -128,9 +131,30 @@
    var home=entity(family.residanceSiteId)||entity(character.boundSiteId);
    return home>0?home:0;
   }
+  async function carriedMeals(character){
+   var pocket=entity(character.inventoryEntityId), meals=[];
+   if(!(pocket>0))return meals;
+   var inventory=await readAt(pocket);
+   for(var ref of (inventory.ownedEntityIds||[]).slice(0,8)){
+    try{
+     var id=entity(ref), item=await readAt(id);
+     if(item.carriableObjectType==='Food')meals.push({entity_id:id});
+    }catch(_){}
+   }
+   return meals;
+  }
   async function needs(member,character,decision,snapshot,minute,token){
    // A bedtime need that could not be met here (no food, no toilet) is not chased: sleep goes ahead for 2 game hours.
    var need=minute>=(decision.bedtimeSkip||0)||minute<(decision.bedtimeSkip||0)-120?L.bedtimeNeed(snapshot.stats.stats):L.urgentNeed(snapshot.stats.stats);
+   var work=snapshot.work, location=entity(character.locatedSiteId), hunger=snapshot.stats.stats.Hunger;
+   var atWork=work.is_at_work||work.is_working_time&&location>0&&location===work.work_site_id;
+   if(atWork){
+    var toilet=snapshot.stats.stats.Toilet;
+    need=L.urgentNeed({Hunger:hunger&&hunger.pct<=18?hunger:null,Toilet:toilet&&toilet.pct<=15?toilet:null});
+   }
+   var prework=!need&&work.has_job&&work.is_working_day&&work.is_commute_time&&!work.is_working_time&&!work.is_at_work&&
+    location>0&&location===work.home_site_id&&hunger&&hunger.pct<=50&&L.relaxed(snapshot.queue);
+   if(prework)need={key:'Hunger',pct:hunger.pct};
    if(!need){
     decision.needFallback=null;
     // Kept while fresh: an early (routine) request still counts if the need turns urgent before it is eaten.
@@ -149,22 +173,32 @@
     return true;
    }
    decision.needPending=null;
-   if(!L.goalReady(snapshot.queue,snapshot.work)||minute<(decision.nextNeed||0)||snapshot.work.is_at_work)return false;
+   if(!L.goalReady(snapshot.queue,work)||minute<(decision.nextNeed||0))return false;
+   var onSite=atWork&&work.simulated!==false&&location>0&&location===work.work_site_id&&L.relaxed(snapshot.queue);
+   if(atWork&&!onSite)return false;
    decision.nextNeed=minute+25;
-   var home=await homeMember(member,character), location=entity(character.locatedSiteId);
+   var home=onSite?work.home_site_id:await homeMember(member,character), action;
    var local=await inventory(member,character);
    if(local){
     var eligible=local.objects.filter(function(o){return L.fixtureMatches(need.key,o.table_id);});
     var ordered=closest(eligible,character,/.*/,5);
-    var action=await objectAction(member,ordered,function(items){return L.needChoice(need.key,items);},token);
-    if(action){
-     if(need.key==='Hunger')decision.noMeal=0;
-     decision.needFallback=null;
-     decision.needPending={key:need.key,bag:action.interaction_bag_id,target:String(action.observer_target),minute:minute,at:Date.now()};
-     log(named(member)+'의 '+(need.bedtime?'잠들기 전 ':'')+(snapshot.stats.stat_names[need.key]||need.key)+' 해결 요청: '+action.display_name);return true;
-    }
-    if(need.key==='Hunger'&&location===home)decision.noMeal=minute+40;
+    action=await objectAction(member,ordered,function(items){return L.needChoice(need.key,items);},token,null,onSite?{site:location,work:true}:null);
    }
+   if(!action&&onSite&&need.key==='Hunger'){
+    var meals=await carriedMeals(character);
+    action=await objectAction(member,meals,function(items){return items.find(function(a){
+     return a.enabled===true&&/^(?:Eat_|(?:Object_)?Food_Eat|Object_.*_Eat)/i.test(a.interaction_bag_id);
+    });},token,null,{site:location,work:true,carried:true});
+   }
+   if(action){
+    if(need.key==='Hunger')decision.noMeal=0;
+    decision.needFallback=null;
+    decision.needPending={key:need.key,bag:action.interaction_bag_id,target:String(action.observer_target),minute:minute,at:Date.now()};
+    var prefix=onSite?'근무지 내 ':prework?'출근 전 ':need.bedtime?'잠들기 전 ':'';
+    log(named(member)+'의 '+prefix+((snapshot.stats.stat_names||{})[need.key]||need.key)+' 해결 요청: '+action.display_name);return true;
+   }
+   if(onSite)return false;
+   if(local&&need.key==='Hunger'&&location===home)decision.noMeal=minute+40;
    if(need.bedtime){decision.bedtimeSkip=minute+120;decision.nextNeed=minute;return false;}
    if(home>0&&location!==home&&(need.key!=='Cleanliness'||need.pct<=12)&&await move(member,home,token)){
     if(decision.outing&&decision.outing.goalVisit)decision.outing=null;
@@ -871,7 +905,7 @@
       });
       if(!pick)choices.forEach(function(a){if(a.enabled===false&&wanted(a)&&disabled.length<6)disabled.push({action:a,target:target});});
       return pick;
-     },token,offers,schoolSite);
+     },token,offers,schoolSite?{site:schoolSite}:null);
     }catch(e){
      if(e.observerBag)M.failed(decision,plan,e.observerBag,e.observerTarget,minute,'게임 행동 응답 확인 필요 / '+e.message);
      else{
@@ -1027,7 +1061,8 @@
       }
       if(await meetForGoal(member,character,decision,snapshot,time,minute,token,plan,condition))return true;
       plan.status='관계·대화 조건 또는 상대 대기';
-      M.note(decision,plan,'waiting',plan.status,'기억한 상대와 재회 또는 사람이 있는 장소 방문',minute);
+      M.note(decision,plan,'waiting',plan.status,plan.requiresTarget?'게임에서 지정한 상대가 있는 장소에서 재확인':
+       '기억한 상대와 재회 또는 사람이 있는 장소 방문',minute);
       continue;
      }
      if(await attemptCondition(plan,condition,progress,label,retry,null))return true;
@@ -1039,6 +1074,8 @@
   async function meetForGoal(member,character,decision,snapshot,time,minute,token,plan,condition){
    if(decision.outing||L.urgentNeed(snapshot.stats.stats)||snapshot.work.is_at_work||snapshot.work.is_working_time||
       snapshot.work.is_commute_time||time.hour<9||time.hour>=20)return false;
+   var target=plan.requiresTarget?String(plan.target):null;
+   if(target&&!(plan.target>0))return false;
    if(decision.meetDay!==time.day){decision.meetDay=time.day;decision.meetings=0;}
    if(decision.meetings>=2)return false;
    var actor=String(member.entity_id), location=entity(character.locatedSiteId), catalog=await currentSites(), life=decisions();
@@ -1051,7 +1088,7 @@
     return info&&!info.bDisabled&&!info.bDevOnly&&/^(?:Business|Public)$/.test(info.siteType)?site:null;
    }
    if(condition.conditionType!=='NewRelationshipCount'){
-    var known=Rel.reunion(life,actor,minute,[]);
+    var known=target?[target]:Rel.reunion(life,actor,minute,[]);
     for(var i=0;i<known.length;i++){
      var other;
      try{other=await readAt(known[i]);}catch(_){continue;}
@@ -1069,6 +1106,7 @@
      return true;
     }
    }
+   if(target)return false;
    var last=decision.lastSocialSite;
    var venue=L.leisureSite(catalog,P.traits((api.snapshot(member.entity_id)||snapshot).trait||{}),last);
    if(!venue||venue.entity_id===location||!await publicSite(venue.entity_id))return false;

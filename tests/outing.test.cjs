@@ -41,6 +41,7 @@ function world(opts = {}) {
  let done = false;
  const cli = async (name, args = {}) => {
   if (name === 'entity.reflect') {
+   if(opts.coworker&&args.entity_id==='55')return {locatedCityName:'Cahaya_Map',locatedSiteId:{value:opts.coworker.site}};
    if(opts.fishing&&args.entity_id==='9')return {ownedEntityIds:opts.rod?[{value:8}]:[]};
    if(opts.fishing&&args.entity_id==='8')return {objectTableId:'Rod',entityTags:[]};
    if (args.Component === 'Hope') return {selectedHopes: [{hopeId: 'Hope_Winter_DrinkCoffee', missionId: {value: 100}}]};
@@ -159,4 +160,17 @@ test('an explicit site wish waits for the current trip, and a teen returning hom
  w.snapshot.queue={queue_count:0};
  assert.equal(await w.actions.pursueHope(w.member,w.character,w.decision,w.snapshot,at(10,21),621,1),true);
  assert.equal(w.decision.outing.goalVisit,'Hope_Winter_DrinkCoffee');
+});
+
+test('a targeted coworker wish waits for that coworker rather than visiting an unrelated park',async()=>{
+ const coworker={site:-1}, w=world({coworker});
+ w.character.locatedCityName='Cahaya_Map';
+ const plan={name:'Hope_Job_BefriendCoworker',instance:10,requiresTarget:true,target:55};
+ const condition={conditionType:'TalkInteractionBagTag',conditionId1:'Hope_Job_GoodTalk'};
+ assert.equal(await w.actions.meetForGoal(w.member,w.character,w.decision,w.snapshot,at(10),600,1,plan,condition),false);
+ assert.equal(w.writes.length,0);
+ coworker.site=CAFE;
+ assert.equal(await w.actions.meetForGoal(w.member,w.character,w.decision,w.snapshot,at(10),600,1,plan,condition),true);
+ assert.equal(w.writes[0][1].target_entity_id,String(CAFE));
+ assert.equal(w.decision.outing.reunion,'55');
 });

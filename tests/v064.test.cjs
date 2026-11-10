@@ -9,17 +9,18 @@ const G = require(path.join(ui, 'gathering.js'));
 const CP = require(path.join(ui, 'career-path.js'));
 const L = require(path.join(ui, 'life.js'));
 
-function actions() {
+function actions(execute, game = {}) {
   const ctx = vm.createContext({ObserverLife: L, ObserverPolicy: require(path.join(ui, 'policy.js')),
     ObserverGoalMemory: require(path.join(ui, 'goal-memory.js')), ObserverChoices: require(path.join(ui, 'choices.js')),
     ObserverRecovery: require(path.join(ui, 'recovery.js')), ObserverRelations: require(path.join(ui, 'relations.js')), ObserverCareerPath: CP,
     ObserverGameData: require(path.join(ui, 'game-data.js')), console});
   ctx.root = ctx; vm.runInContext('this.root=this;', ctx);
   vm.runInContext(fs.readFileSync(path.join(ui, 'life-actions.js'), 'utf8'), ctx);
-  const calls = [];
-  const a = ctx.ObserverLifeActions.create({cli: async n => { calls.push(n); throw Error(n); }, write: async n => { calls.push(n); },
-    log: () => {}, state: {}, game: () => ({}), members: () => []});
-  return {a, calls};
+  const calls = [], writes = [];
+  const a = ctx.ObserverLifeActions.create({cli: async (n,args) => { calls.push(n); if(execute)return execute(n,args); throw Error(n); },
+    write: async (n,args) => { calls.push(n); writes.push(args); },
+    log: () => {}, state: {}, game: () => game, members: () => []});
+  return {a, calls, writes};
 }
 const hungry = {stats: {Hunger: {pct: 5}, Toilet: {pct: 80}, Sleep: {pct: 80}, Cleanliness: {pct: 80}}};
 
@@ -42,6 +43,57 @@ test('a meal that never showed up, or is 90 game minutes old, is requested again
   const busy = {stats: hungry, queue: {queue_count: 2, entries: null, current: null}, work: {is_at_work: true}};
   assert.equal(await a.needs({entity_id: 1}, {}, old, busy, 1095, 't'), false);
   assert.equal(old.needPending, null);
+});
+
+function mealAt(site,{fridge=true,hidden=false,carried=false}={}){
+ const character={locatedSiteId:{value:site},inventoryEntityId:{value:12},worldTransform:{translation:{x:0,y:0,z:0}}};
+ const mock=actions((name,args)=>{
+  if(name==='entity.reflect'){
+   if(args.Component==='RabbitHole')return {currentRabbitHoleId:hidden?'IT_Work':'None'};
+   if(args.entity_id==='10')return {residanceSiteId:{value:30}};
+   if(args.entity_id==='12')return {ownedEntityIds:carried?[{value:72}]:[]};
+   if(args.entity_id==='72')return {carriableObjectType:'Food',locatedSiteId:{value:-1}};
+   return character;
+  }
+  if(name==='world.get_loaded_sites')return {map_id:'Gangnam_Map',sites:[{entity_id:site,id:'Room'}]};
+  if(name==='build.get_site_info')return {site_id:'Room'};
+  if(name==='build.scan_objects')return {total:fridge?1:0,objects:fridge?[{entity_id:71,table_id:'Fridge04',world_location:{x:2,y:0,z:0}}]:[]};
+  if(name==='interaction.get_queue')return {queue_count:0};
+  if(name==='interaction.list_available')return {interactions:[{
+   interaction_bag_id:args.target_entity_id==='72'?'Eat_Served_Meal':'Eat_Fridge_Served_Soup',enabled:true,display_name:'먹기'
+  }]};
+  throw Error(name);
+ },{map_id:'Gangnam_Map',possessed_entity_id:1});
+ return {...mock,character,member:{entity_id:1,household_id:10}};
+}
+
+test('the commute window permits an available meal at home before hunger turns urgent',async()=>{
+ const h=mealAt(30), d={}, queue={queue_count:0};
+ const stats={stats:{...hungry.stats,Hunger:{pct:47}}};
+ const work={has_job:true,is_working_day:true,is_commute_time:true,is_working_time:false,home_site_id:30,work_site_id:40};
+ assert.equal(await h.a.needs(h.member,h.character,d,{stats,work,queue},1000,'t'),true);
+ assert.equal(h.writes[0].interaction_bag_id,'Eat_Fridge_Served_Soup');
+ assert.equal(await h.a.needs(h.member,h.character,d,{stats,work,queue},1003,'t'),true);
+ assert.equal(h.writes.length,1);
+});
+
+test('a critical workplace meal can use the actor inventory without leaving or interrupting work',async()=>{
+ const work={is_at_work:true,work_site_id:40,home_site_id:30};
+ const queue={queue_count:0};
+ const h=mealAt(40,{fridge:false,carried:true});
+ assert.equal(await h.a.needs(h.member,h.character,{}, {stats:hungry,work,queue},1000,'t'),true);
+ assert.equal(h.writes[0].target_entity_id,'72');
+ const hidden=mealAt(40,{hidden:true});
+ assert.equal(await hidden.a.needs(hidden.member,hidden.character,{}, {stats:hungry,work,queue},1000,'t'),false);
+ assert.equal(hidden.writes.length,0);
+ const noFood=mealAt(40,{fridge:false});
+ assert.equal(await noFood.a.needs(noFood.member,noFood.character,{}, {stats:hungry,work,queue},1000,'t'),false);
+ assert.equal(noFood.writes.length,0);
+ const working=mealAt(40);
+ assert.equal(await working.a.needs(working.member,working.character,{},{
+  stats:hungry,work,queue:{queue_count:0,current:{interaction_bag_id:'Work_Computer'}}
+ },1000,'t'),false);
+ assert.equal(working.writes.length,0);
 });
 
 test('names the game uses for other things are not invitations or parties', () => {
