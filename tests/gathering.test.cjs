@@ -22,7 +22,7 @@ function world(opts) {
   };
   Object.keys(w.values).forEach(id => { Rel.remember(w.life, '1', id, {name: 'N' + id}, 100); w.where[id] = PARK; });
   w.api = {
-    L, Rel, life: () => w.life, members: () => [{entity_id: 1}, {entity_id: 2}], game: () => ({map_id: 'Dowon'}),
+    L, Rel, life: () => w.life, members: () => opts.members || [{entity_id: 1, household_id: 7}, {entity_id: 2, household_id: 7}], game: () => ({map_id: 'Dowon'}),
     home: async () => HOME, log: m => w.logs.push(m), score: e => w.scores.push(e),
     write: async (name, args) => { w.writes.push(args); },
     cli: async (name, args) => {
@@ -35,7 +35,7 @@ function world(opts) {
     },
   };
   w.g = G.create(w.api);
-  w.member = {entity_id: 1, first_name: '하나'};
+  w.member = {entity_id: 1, household_id: 7, first_name: '하나'};
   w.character = {locatedSiteId: {value: HOME}};
   w.snapshot = {work: {}, queue: {current: null, items: []}, stats: {stats: {Hunger: {pct: 80}, Sleep: {pct: 80}, Toilet: {pct: 80}, Cleanliness: {pct: 80}, Society: {pct: 40}}}};
   w.host = (p, minute, hour) => w.g.host(w.member, w.character, p, w.snapshot, {hour: hour == null ? 14 : hour}, minute, 1);
@@ -135,4 +135,44 @@ test('loading an earlier save clears a pending invitation', async () => {
   await w.host(p, 5000);
   assert.strictEqual(await w.g.review(w.member, p, 4000), null);
   assert.strictEqual(p.gather.pending, null);
+});
+
+test('a friend already visiting is not invited, so their presence cannot count as a success', async () => {
+  const w = world({values: {'50': 80}}), p = {};
+  w.where['50'] = HOME;
+  assert.strictEqual(await w.host(p, 1000), false);
+  assert.strictEqual(w.writes.length, 0);
+  assert.strictEqual(w.life.gatherBags, undefined);
+});
+
+test('an action that worked before is also rested after two misses in a row', async () => {
+  const w = world({values: {'50': 80}}), p = {};
+  await w.host(p, 1000); w.where['50'] = HOME; await w.g.review(w.member, p, 1050);
+  w.where['50'] = PARK;
+  let t = 1050 + 1440;
+  for (let i = 0; i < 2; i++) { p.gather.hosting = null; p.gather.next = 0; assert.strictEqual(await w.host(p, t, 14), true); t += G.WAIT; await w.g.review(w.member, p, t); t += 10; }
+  p.gather.next = 0;
+  assert.strictEqual(await w.host(p, t, 14), false);
+  assert.strictEqual(w.writes.length, 3);
+});
+
+test('a rested offer does not hide a phone action found in game data', async () => {
+  const w = world({values: {'50': 80}, search: [{interaction_bag_id: 'Self_Phone_InviteFriendHome', display_name: '친구 초대'}]}), p = {};
+  w.life.gatherBags = {Co_Friendship_InviteHome: {ok: 0, fail: 2, retry: 99999}};
+  assert.strictEqual(await w.host(p, 1000), true);
+  assert.strictEqual(w.writes[0].interaction_bag_id, 'Self_Phone_InviteFriendHome');
+});
+
+test('a friend in another played household can be invited', async () => {
+  const w = world({values: {'50': 80}, members: [{entity_id: 1, household_id: 7}, {entity_id: 50, household_id: 8}]}), p = {};
+  assert.strictEqual(await w.host(p, 1000), true);
+  assert.strictEqual(w.writes[0].target_entity_id, '50');
+});
+
+test('the host does not leave for events or holidays while guests are expected', () => {
+  const src = require('node:fs').readFileSync(path.join(ui, 'app.js'), 'utf8');
+  for (const key of ['outing', 'vacation', 'event']) {
+    const line = src.split('\n').find(l => l.includes("{key:'" + key + "'"));
+    assert.ok(/gathering\.waiting\(p\)/.test(line), key);
+  }
 });
