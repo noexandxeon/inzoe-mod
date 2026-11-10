@@ -239,3 +239,20 @@ test('0.6.19: the newest loan bill in a long bank thread is read, with or withou
   assert.equal(C.paymentAmount(thread.slice(0, 6), 'interest'), 760);
   assert.equal(C.paymentAmount([t('총 청구 금액 : 807 뮤'), t('총 청구 금액 : 786 뮤')], 'tax'), 786);
 });
+
+test('0.6.20: idle means nothing queued and nothing or only idling playing, outside work hours', () => {
+  assert.equal(L.idleNow({queue_count: 0, current: null}, {}), true);
+  assert.equal(L.idleNow({queue_count: 0, current: {interaction_bag_id: 'Self_Idle_WarmingUp'}}, {}), true);
+  assert.equal(L.idleNow({queue_count: 0, current: {interaction_bag_id: 'On_TV01_Channel_14'}}, {}), false);
+  assert.equal(L.idleNow({queue_count: 1, current: null}, {}), false);
+  assert.equal(L.idleNow({queue_count: 0, current: null}, {is_working_time: true}), false);
+});
+
+test('0.6.20: an idle Zoi practises a known skill before a pastime and never picks a harmful or costly action', async () => {
+  const {a} = actions();
+  assert.equal(typeof a.leisure, 'function');
+  const src = fs.readFileSync(path.join(ui, 'life-actions.js'), 'utf8');
+  assert.match(src, /LEISURE_SKIP=\/Sell\|Buy\|Purchase/);
+  const app = fs.readFileSync(path.join(ui, 'app.js'), 'utf8');
+  assert.match(app, /slots:freeSlots/);
+});

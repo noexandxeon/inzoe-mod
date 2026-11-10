@@ -263,6 +263,43 @@
    return false;
   }
   // 0.4.7: shower or eat at home before the need turns urgent, at most once per 2 game hours per need.
+  // 0.6.20: something worth doing when the Zoi stands idle: practise a skill the Zoi already has or is building
+  // (the ambition's or a hope's), otherwise a pastime for a low Fun need. Only objects at the current place,
+  // nothing that spends money, sells, breaks or harms.
+  var LEISURE_SKIP=/Sell|Buy|Purchase|Order|Delete|Destroy|Break|Kick|Steal|Prank|Karma|Throw|Upgrade|PickUp|Pick_Up|Move|Repair|Clean|Mop|Wash|Toilet|Shower|Bath|Bed_|Sleep|Nap|Eat|Fridge|Food|Drink|Cook_Meal|Serve|Dump|Dirty|Turn_?Off|Off_|Lock|Unlock|Door|Window|Light|Fire|Burn|Pee|Fart|Cry|Angry|Fight|Rob|Hack|Scam|Smoke|Alcohol|Beer|Soju|Wine/i;
+  var LEISURE_FUN=/TV|Audio|Speaker|Radio|Game|Console|Arcade|Movie|Music|Dance|Guitar|Piano|Drum|Violin|Book|Read|Chess|Puzzle|Painting|Paint|Draw|Sing|Karaoke|Write|Computer_Use|Laptop|Exercise|Workout|Pushup|Situp|Yoga|Treadmill|Dumbbell|Boxing|Meditat|Garden|Plant|Fish/i;
+  async function leisure(member,character,decision,snapshot,skills,minute,token){
+   if(!L.idleNow(snapshot.queue,snapshot.work)||minute<(decision.nextLeisure||0))return false;
+   decision.nextLeisure=minute+20;
+   var local=await inventory(member,character);
+   if(!local)return false;
+   var stats=snapshot.stats&&snapshot.stats.stats||{};
+   var fun=stats.Fun&&Number.isFinite(stats.Fun.pct)?stats.Fun.pct:100;
+   var wanted=(skills||[]).filter(function(s){return s&&s.skill_id;}).sort(function(a,b){return (b.level||0)-(a.level||0);})
+    .map(function(s){return String(s.skill_id).replace(/^Skill_?/i,'');}).filter(Boolean).slice(0,4);
+   var recent=decision.leisureRecent||(decision.leisureRecent=[]);
+   var objects=closest(local.objects.filter(function(o){return LEISURE_FUN.test(o.table_id||'');}),character,/.*/,8);
+   var action=await objectAction(member,objects,function(items){
+    var ok=items.filter(function(a){
+     var key=(a.interaction_bag_id||'')+' '+(a.display_name||'');
+     return !LEISURE_SKIP.test(a.interaction_bag_id||'')&&LEISURE_FUN.test(key)&&recent.indexOf(a.interaction_bag_id)<0;
+    });
+    var score=function(a){
+     var key=a.interaction_bag_id||'', s=0;
+     wanted.forEach(function(w,i){if(w&&key.toLowerCase().indexOf(w.toLowerCase())>=0)s+=8-i;});
+     if(fun<50&&/TV|Audio|Game|Console|Movie|Music|Dance|Book|Read/i.test(key))s+=4;
+     if(/Practice|Study|Train|Workout|Exercise|Pushup|Yoga|Write|Paint|Guitar|Piano|Chess|Computer_Use/i.test(key))s+=3;
+     return s;
+    };
+    return ok.sort(function(a,b){return score(b)-score(a);})[0]||null;
+   },token);
+   if(!action)return false;
+   recent.push(action.interaction_bag_id);
+   if(recent.length>4)recent.shift();
+   decision.nextLeisure=minute+45;
+   log(named(member)+': 빈 시간 활용 / '+(action.display_name||action.interaction_bag_id));
+   return true;
+  }
   async function routine(member,character,decision,snapshot,minute,token){
    var need=L.routineNeed(snapshot.stats.stats);
    if(!need||!L.goalReady(snapshot.queue,snapshot.work)||snapshot.work.is_at_work||snapshot.work.is_working_time||snapshot.work.is_commute_time)return false;
@@ -1707,7 +1744,7 @@
    return fixtures.concat(near);
   }
   function reset(){siteMemory={};sites=null;householdCache={};homeCache={};houseTasks={};repairs={};}
-  return {reset:reset,needs:needs,routine:routine,clean:clean,repair:repair,parcels:parcels,marketNeed:marketNeed,reviewGoal:reviewGoal,observeGoalAction:observeGoalAction,trackGoal:trackGoal,prepareGoals:prepareGoals,attend:attend,
+  return {reset:reset,needs:needs,routine:routine,leisure:leisure,clean:clean,repair:repair,parcels:parcels,marketNeed:marketNeed,reviewGoal:reviewGoal,observeGoalAction:observeGoalAction,trackGoal:trackGoal,prepareGoals:prepareGoals,attend:attend,
    pursueHope:pursueHope,pursueSchoolHope:pursueSchoolHope,prepareAmbition:prepareAmbition,pursueAmbition:pursueAmbition,
    affection:affection,goalConversation:goalConversation,meetForGoal:meetForGoal,
    occupation:occupation,sideIncome:sideIncome,outing:outing,socialOuting:socialOuting,ensureTraining:ensureTraining,vacation:vacation,householdPlan:householdPlan,furnish:furnish,move:move,home:homeMember,computers:computers,siteObjects:siteObjects,objectAction:objectAction,knowsSite:knowsSite};

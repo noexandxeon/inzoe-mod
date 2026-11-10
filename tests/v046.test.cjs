@@ -356,7 +356,8 @@ test('returning from a trip resumes a Start that the loaded city save does not c
  assert.equal(R.resumeDecision({enabled:false}, {...mirror, stoppedByUser:true}, household, game, 2000), null);
  assert.equal(R.resumeDecision({enabled:false}, {...mirror, enabled:false}, household, game, 2000), null);
  assert.equal(R.resumeDecision({enabled:false}, {...mirror, household:'99', awayTravel:null}, household, game, 2000), null);
- assert.equal(R.resumeDecision({enabled:false}, mirror, household, game, 1000 + 7*3600*1000), null);
+ // 0.6.20: a later continue (the next morning) still resumes; only the player's Stop keeps it off.
+ assert.equal(R.resumeDecision({enabled:false}, mirror, household, game, 1000 + 7*3600*1000).enable, true);
  assert.equal(R.resumeDecision({enabled:true}, mirror, household, game, 2000).enable, false);
 });
 test('payments and replies handled after the last save are merged back, never removed', () => {

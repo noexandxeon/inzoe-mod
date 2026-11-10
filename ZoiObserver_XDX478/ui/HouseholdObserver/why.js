@@ -7,7 +7,7 @@
   nextNeed:'욕구 해결',nextHopeAction:'소망 행동',nextSchoolHope:'학교 소망',nextAmbitionAction:'야망 행동',nextTalk:'대화',nextSocialOuting:'사교 외출',
   nextOuting:'여가 외출',nextVacation:'휴가',nextSide:'개인 작업',nextMarket:'포켓마켓',nextCatShop:'냥스토어',nextRepair:'집 수리',
   nextParcel:'택배',nextCleaning:'청소',nextFurnish:'가구 마련',nextGoalFurnish:'목표용 가구',nextPhoneAction:'휴대폰',nextPhone:'휴대폰 확인',
-  nextTaste:'취향 정리',nextCommute:'출근',nextHousePlan:'주거 판단',nextPlanning:'진로 판단',nextCheckIn:'숙소 체크인',nextReturn:'귀가'
+  nextTaste:'취향 정리',nextLeisure:'빈 시간 활용',nextCommute:'출근',nextHousePlan:'주거 판단',nextPlanning:'진로 판단',nextCheckIn:'숙소 체크인',nextReturn:'귀가'
  };
  function clock(minute){
   var h=Math.floor(minute%1440/60), m=Math.floor(minute%60);

@@ -33,6 +33,14 @@
  // 0.6.7: in game the Zoi was sent to bed with hunger and toilet half empty and woke with hunger 3%,
  // toilet 15% and hygiene 7% at once (day 1008). Before a sleep that is not yet an emergency, the need
  // that would not last the night is handled first.
+ // 0.6.20: the Zoi has nothing of its own going on: no queued action, and nothing or only idling/standing playing.
+ var IDLE_BAG=/^(?:Self_Idle|Idle_|SelfMove|Self_Wait|Self_Stand|Stand_|Wait_)|_Idle(?:_|$)|Bored|Daydream|WarmingUp$/i;
+ function idleNow(queue,work){
+  if(!queue||work&&(work.is_at_work||work.is_working_time||work.is_commute_time))return false;
+  if((Number(queue.queue_count)||0)>0)return false;
+  var c=queue.current;
+  return !c||!c.interaction_bag_id||IDLE_BAG.test(c.interaction_bag_id);
+ }
  function bedtimeNeed(stats){
   var first=urgentNeed(stats);
   if(!first||first.key!=='Sleep'||first.pct<=8)return first;
@@ -315,7 +323,7 @@
    .sort(function(a,b){return a.pct-b.pct;})[0]||null;
  }
 
- var api={itemForTag:itemForTag,tripReady:tripReady,objectHints:objectHints,QUEUE_LIMIT:QUEUE_LIMIT,TRAVEL:TRAVEL,adultAge:adultAge,goalVenueIds:goalVenueIds,goalReady:goalReady,urgentNeed:urgentNeed,bedtimeNeed:bedtimeNeed,routineNeed:routineNeed,goalHomeItem:goalHomeItem,relaxed:relaxed,fixtureMatches:fixtureMatches,needChoice:needChoice,goalVenueTags:goalVenueTags,
+ var api={itemForTag:itemForTag,tripReady:tripReady,objectHints:objectHints,QUEUE_LIMIT:QUEUE_LIMIT,TRAVEL:TRAVEL,adultAge:adultAge,goalVenueIds:goalVenueIds,goalReady:goalReady,urgentNeed:urgentNeed,bedtimeNeed:bedtimeNeed,idleNow:idleNow,routineNeed:routineNeed,goalHomeItem:goalHomeItem,relaxed:relaxed,fixtureMatches:fixtureMatches,needChoice:needChoice,goalVenueTags:goalVenueTags,
   relationshipEntry:relationshipEntry,relationshipStage:relationshipStage,hasOtherPartner:hasOtherPartner,
   romanceChoice:romanceChoice,dayBudget:dayBudget,ledgerCheckpoint:ledgerCheckpoint,matchingDebit:matchingDebit,debitCount:debitCount,
   entrepreneur:entrepreneur,sideJobs:sideJobs,housingChoice:housingChoice,

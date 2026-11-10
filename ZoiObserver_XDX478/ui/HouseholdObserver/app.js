@@ -1,6 +1,6 @@
 (function () {
  'use strict';
- var VERSION='0.6.19', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.6.20', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var A=ObserverAgenda, R=ObserverRecovery, Rel=ObserverRelations, M=ObserverGoalMemory;
  var ChildCare=ObserverChildCare, Score=ObserverScoreboard, CP=ObserverCareerPath, Persona=ObserverPersona, Rot=ObserverRotation, Field=ObserverFieldCheck, Family=ObserverFamily, Why=ObserverWhy;
  var claims=Family.create(), nowMinute=NaN, popupTrack=null, expectedSelected=null, lastSelected=null;
@@ -986,6 +986,8 @@
    {key:'gather',label:'지인 초대·파티',base:26,bonus:lonely?25:0,eligible:!p.outing&&!p.goal&&!Family.hostBusy(state.people,members,m)&&ObserverGathering.due(p,time,minute),
     run:function(){return attempt('초대',function(){return gathering.host(m,character,p,snapshots[id],time,minute,token);});}},
    {key:'social',label:'대화·관계',base:28,duringGoal:true,bonus:needs.Society&&needs.Society.pct<25?40:lonely?20:p.bond&&p.bond.close<2?22:0,run:function(){return talk(m,character,p,minute,token,snapshots[id]);}},
+   {key:'leisure',label:'여가·기술 연습',base:14,duringGoal:false,eligible:L.idleNow(snapshots[id].queue,work),
+    run:function(){return attempt('여가',function(){return life.leisure(m,character,p,snapshots[id],skills,minute,token);});}},
    {key:'career',label:'구직·이직',base:m.has_career?8:38,eligible:ChildCare.mayJoin(m,L),
     run:function(){return attempt('진로',function(){return career(m,p,time,minute,token,profile,work,queue);});}}
   ];
@@ -993,11 +995,15 @@
   p.persona=Persona.weights(P.traits(profile.trait),CP.ambitionFocus(p.ambition),id);
   Persona.apply(tasks,p.persona);
   var context={late:time.hour>=19,lowNeeds:lowNeeds};
+  var q0=snapshots[id].queue||{}, inQueue=(Number(q0.queue_count)||0)+(q0.current?1:0);
+  var freeSlots=work.is_at_work||work.is_working_time||work.is_commute_time?1:Math.max(1,Math.min(3,L.QUEUE_LIMIT-inQueue));
   var ranked=A.order(p,tasks,minute,context);
   p.upcoming=ranked.slice(0,3).map(function(r){return r.task.label;});
   var turnStart=Date.now();
   await A.run(p,tasks,minute,context,{
    receipt:function(){return receiptSerial;},
+   // 0.6.20: the slots hook was never passed, so one task ran per look and the rest of the queue stayed empty.
+   slots:freeSlots,
    moved:function(){return (state.lastMoveAt||0)>=turnStart;},
    skip:function(task){
    // 0.6.16: once a hope action has been seen running, the next hope may be queued behind it.
@@ -1117,6 +1123,9 @@
   log('여행 귀환 확인 · 미뤄 둔 생활 작업과 답장·납부를 다시 확인합니다.');
  }
  async function saveMirror(force){
+  // 0.6.20: an observer that is off only because it has not resumed yet must not write "off" over the
+  // player's running state (that is how the morning restart stayed off for good). Stop still writes.
+  if(!state.enabled&&!mirrorStopped)return;
   if(!force&&Date.now()-lastMirror<30000)return;
   lastMirror=Date.now();
   try{await cli('uimod.cfg_save',{mod_id:wf.MOD_ID,section:'ui/'+wf.APP_NAME+'/saved',key:'observer-resume',

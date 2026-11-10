@@ -91,7 +91,9 @@
  function resumeDecision(saved,mirror,household,game,now){
   if(!mirror||mirror.enabled!==true||mirror.stoppedByUser)return null;
   if(!game||game.phase!=='in_game'||game.loading)return null;
-  if(!Number.isFinite(mirror.at)||now-mirror.at>6*3600*1000)return null;
+  // 0.6.20: no real-time limit. In game the player saved at 01:28 and continued at 07:52; the six-hour limit left
+  // the household unmanaged all morning. Only the player's Stop (stoppedByUser) keeps the observer off.
+  if(!Number.isFinite(mirror.at))return null;
   var id=String(household&&household.household_id||'');
   if(!id)return null;
   var away=mirror.awayTravel;
