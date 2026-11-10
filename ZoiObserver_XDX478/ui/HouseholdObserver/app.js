@@ -1,8 +1,8 @@
 (function () {
  'use strict';
- var VERSION='0.5.2', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.5.3', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var A=ObserverAgenda, R=ObserverRecovery, Rel=ObserverRelations, M=ObserverGoalMemory;
- var ChildCare=ObserverChildCare;
+ var ChildCare=ObserverChildCare, Score=ObserverScoreboard;
  var busy=false, epoch=0, index=0, cache={}, profiles={}, rows={}, members=[], lastReport=0;
  // Kept on window so a live update keeps the log history.
  var logs=window.ZoiObserverLogs||(window.ZoiObserverLogs=[]);
@@ -95,6 +95,8 @@
     var ft=gm&&M.flowText(gm.memory);
     if(ft)html+='<p class="help">'+esc(ft)+'</p>';
    }
+   var tally=Number.isFinite(p.lastMinute)&&Score.line(state,Score.dayOf(p.lastMinute),id);
+   if(tally)html+='<p class="intent">'+esc(tally)+'</p>';
    if(p.goalBlock)html+='<p>막힘: '+esc(p.goalBlock)+'</p>';
    if(ChildCare.dependent(m)&&p.childCare&&p.childCare.status)html+='<p>돌봄: '+esc(p.childCare.status)+'</p>';
    if(p.upcoming&&p.upcoming.length)html+='<p class="help">다음 차례: '+esc(p.upcoming.join(' → '))+'</p>';
@@ -333,7 +335,7 @@
   await life.reviewGoal(member,decision,{queue:queue},minute);
  }
  async function report(manual){
-  var payload={gameData:gameData.summary(),queueSample:state.queueSample||null,execTrail:state.execTrail||[],daily:state.daily||{},lastReturn:state.lastReturn||null,version:VERSION,created:new Date().toISOString(),enabled:state.enabled,scope:state.scope,background:state.background,household:state.household,status:status,game:lastGame,popup:blockedPopup,travel:state.travel,awayTravel:state.awayTravel,news:panels.latestNews(),members:members,snapshots:snapshots,decisions:state.people,capabilities:caps,logs:logs,last_cycle:lastCycle};
+  var payload={score:Score.report(state),gameData:gameData.summary(),queueSample:state.queueSample||null,execTrail:state.execTrail||[],daily:state.daily||{},lastReturn:state.lastReturn||null,version:VERSION,created:new Date().toISOString(),enabled:state.enabled,scope:state.scope,background:state.background,household:state.household,status:status,game:lastGame,popup:blockedPopup,travel:state.travel,awayTravel:state.awayTravel,news:panels.latestNews(),members:members,snapshots:snapshots,decisions:state.people,capabilities:caps,logs:logs,last_cycle:lastCycle};
   await cli('uimod.cfg_save',{mod_id:wf.MOD_ID,section:'ui/'+wf.APP_NAME+'/saved',key:manual?'observer-report':'observer-auto',value:JSON.stringify(payload)});
   lastReport=Date.now();return payload;
  }
@@ -687,6 +689,7 @@
   snapshots[id]={sampled_at:new Date().toISOString(),stats:stats,queue:queue,hope:hope,work:work,autonomy:auto,trait:profile.trait,note:note};
   if(cache[id]!==note){cache[id]=note;log(m.first_name+': '+note);}
   if(!state.enabled||token!==epoch||!sameCity)return;
+  await keepScore(m,p,hope,stats,work,sleeping,minute);
   try{await life.reviewGoal(m,p,snapshots[id],minute);}
   catch(e){log(m.first_name+': 목표 결과 확인 보류 - '+e.message);}
   if(sleeping){p.wasSleeping=true;return;}
@@ -805,6 +808,62 @@
   }});
   A.compact(p);
   daily(time,id,p);
+ }
+ // 0.5.3 scoreboard: dated facts per Zoi. Hope completion is taken from the game's mission record only.
+ async function keepScore(m,p,hope,stats,work,sleeping,minute){
+  var id=String(m.entity_id), day=Score.dayOf(minute);
+  try{
+   if(p.scoreDay!==undefined&&p.scoreDay!==day){
+    var past=Score.line(state,p.scoreDay,id);
+    if(past)log(m.first_name+': 지난 하루 성적 · '+past.replace(/^오늘 /,''));
+   }
+   p.scoreDay=day;
+   Score.observe(state,minute,id,{stats:stats.stats,sleeping:sleeping,
+    working:!!(work.is_at_work||work.is_working_time||work.is_commute_time)},Date.now());
+   var names=hope.selected.map(function(h){return h.hope_id;});
+   // The mission record is read only when the hope list changed, or hourly to catch a hope that
+   // finished while still listed. This keeps the extra game calls small.
+   if(Score.hopesChanged(state,id,names)||minute>=(p.nextScoreRead||0)||minute<(p.lastScoreRead||0)){
+    p.nextScoreRead=minute+60;p.lastScoreRead=minute;
+    var own=await cli('entity.reflect',{entity_id:id,Component:'Hope'}), missions=await cli('entity.reflect',{entity_id:id,Component:'Mission'});
+    var selected=(own.selectedHopes||[]).map(function(h){
+     var listed=hope.selected.find(function(x){return x.hope_id===h.hopeId;}), expiry=L.hopeDeadline(listed||h);
+     var instance=h.missionId&&typeof h.missionId==='object'?h.missionId.value:h.missionId;
+     return {name:h.hopeId,instance:instance>0?instance:null,expire:Number.isFinite(expiry)?expiry/600000000:null};
+    });
+    Score.hopes(state,minute,id,selected,missions.missionMap||null).forEach(function(x){
+     log(m.first_name+(x.outcome==='completed'?': 소망 완료 집계 (게임 미션 확인) / ':
+      x.outcome==='expired'?': 소망 기한 만료 / ':': 소망이 목록에서 빠짐 · 완료 기록 없음 / ')+x.name);
+    });
+   }
+   scoreMemory(id,p,minute);
+  }catch(e){
+   if(cache['score:'+id]!==e.message){cache['score:'+id]=e.message;log(m.first_name+': 성적표 기록 보류 - '+e.message);}
+  }
+ }
+ // Requests, failures, blocks, outings and finished ambition missions, read from what the mod already remembers.
+ // Each fact has a key, so looking again never counts it twice.
+ function scoreMemory(id,p,minute){
+  var memory=p.goalMemory||{};
+  Object.keys(memory).forEach(function(k){
+   var item=memory[k], base=String(item.instance)+':'+item.name;
+   if(item.kind==='ambition'&&item.phase==='completed')
+    Score.event(state,{minute:minute,zoi:id,kind:'ambition_completed',key:base,name:item.name,evidence:'mission'});
+   if(item.block&&item.block.kind)
+    Score.event(state,{minute:minute,zoi:id,kind:'blocked',key:base+':'+item.block.kind,name:item.name,reason:item.block.kind});
+   if(item.phase==='unsupported')
+    Score.event(state,{minute:minute,zoi:id,kind:'blocked',key:base+':unsupported',name:item.name,reason:'unsupported'});
+   Object.keys(item.failures||{}).forEach(function(f){
+    Score.event(state,{minute:minute,zoi:id,kind:'failed',key:base+':'+f+':'+item.failures[f].count,name:item.name});
+   });
+  });
+  if(p.goal&&p.goal.sentAt)
+   Score.event(state,{minute:minute,zoi:id,kind:'request',key:String(p.goal.instance)+':'+p.goal.bag+':'+p.goal.sentAt,name:p.goal.name});
+  if(p.outing&&p.outing.goalVisit){
+   var trip=String(p.outing.site)+':'+p.outing.start;
+   Score.event(state,{minute:minute,zoi:id,kind:'outing',key:trip,name:p.outing.name});
+   if(p.outing.found)Score.event(state,{minute:minute,zoi:id,kind:'outing_found',key:trip,name:p.outing.name});
+  }
  }
  function daily(time,id,p){
   var days=state.daily||(state.daily={}), key=String(time.day), today=days[key]||(days[key]={});

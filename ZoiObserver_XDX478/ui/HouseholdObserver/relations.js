@@ -42,7 +42,10 @@
   var p=item.pending, stats=relationship&&relationship.stats||{};
   var f=value(stats,'Friendship'), r=value(stats,'Romance');
   var delta=(f!=null&&p.friendship!=null?f-p.friendship:0)+(r!=null&&p.romance!=null?r-p.romance:0);
-  var outcome=evidence&&evidence.notStarted?'not_executed':evidence&&evidence.stageChanged?'improved':
+  // A conversation can start and finish between two inspections, so "never seen running" is not proof
+  // that it did not happen. A measured change in the relationship is the stronger evidence.
+  var unseen=evidence&&evidence.notStarted&&Math.abs(delta)<=0.5;
+  var outcome=unseen?'not_executed':evidence&&evidence.stageChanged?'improved':
    p.kind!=='courtship'&&p.kind!=='talk'&&evidence&&evidence.formalExpired?'rejected':
    delta>0.5?'improved':delta<-0.5?'worse':'flat';
   item.outcome=outcome;item.reason=OUTCOMES[outcome];item.settledAt=minute;

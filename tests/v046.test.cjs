@@ -354,7 +354,7 @@ function appHarness(execute) {
   }}, view:{show(){shows++;}}, trigger:{onActivated:fn=>trigger=fn}, saveState:{register(){}, onLoad:fn => deliver = fn}},
   setInterval:(fn, ms) => intervals.set(ms, fn), setTimeout:() => 0, clearTimeout(){}, addEventListener(){}, Date});
  context.window = context;
- for (const name of ['window','policy','protocol','life','child-care','game-data','goal-memory','agenda','recovery','relations','choices','life-actions','panels','travel','app'])
+ for (const name of ['window','policy','protocol','life','child-care','game-data','goal-memory','scoreboard','agenda','recovery','relations','choices','life-actions','panels','travel','app'])
   vm.runInContext(fs.readFileSync(path.join(ui, name + '.js'), 'utf8'), context, {filename:name + '.js'});
  return {context, intervals, saved, elements, load:value => deliver(JSON.stringify(value)), trigger:event=>trigger(event), shows:()=>shows};
 }

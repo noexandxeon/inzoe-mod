@@ -12,7 +12,7 @@ export default [{
         'inzoi', 'engine', 'wf',
         'ObserverLife', 'ObserverPolicy', 'ObserverGoalMemory', 'ObserverChoices', 'ObserverAgenda', 'ObserverRecovery',
         'ObserverRelations', 'ObserverGameData', 'ObserverChildCare', 'ObserverProtocol', 'ObserverTravel',
-        'ObserverPanels', 'ObserverLifeActions']),
+        'ObserverPanels', 'ObserverLifeActions', 'ObserverScoreboard']),
       module: 'writable',
     },
   },
