@@ -422,6 +422,28 @@ test('the anonymous youth growth notice confirms only the matching native drama 
  assert.equal(choice(popup,row,labels,{...tree,label:'구매하시겠습니까?'},member),null);
  assert.equal(choice(popup,{...row,buttonDetail:[row.buttonDetail[0],{...row.buttonDetail[1],scriptId:'Purchase'}]},labels,tree,member),null);
 });
+test('an unsupported team project result keeps its visible button in the report without clicking it',async()=>{
+ const popup={popup_id:'TeamProjectResultPopup',desc:'프로젝트 결과',buttons:[]}, clicks=[];
+ const h=appHarness((name,args)=>{
+  if(name==='game.get_state')return {phase:'in_game',map_id:'Gangnam_Map',possessed_entity_id:1,blocking:{popup_count:1,primary_detail:popup.popup_id}};
+  if(name==='environment.get_time')return {day:1,hour:15,minute:0};
+  if(name==='environment.get_simulation')return {is_paused:true};
+  if(name==='household.get_members')return {household_id:11,members:[{entity_id:1,first_name:'예성',household_id:11}]};
+  if(name==='ui.get_blocking')return {popups:[popup]};
+  if(name==='ui.list_windows')return {windows:[{layer:'Popup',ui_type:'CommonPopup',window:'WBP_ProjectResult'}]};
+  if(name==='ui.get_tree'){
+   assert.equal(args.Window,'WBP_ProjectResult');
+   return {ui_type:'CommonPopup',label:'팀 프로젝트 결과',nodes:[{role:'button',ref:'WBP_ProjectResult/Button',text:'닫기'}]};
+  }
+  if(name==='ui.click_popup_button')clicks.push(args);
+  return {};
+ });
+ h.load({schema:1,enabled:true,household:11,people:{}});
+ await h.intervals.get(10000)();
+ assert.equal(clicks.length,0);
+ const report=JSON.parse(h.saved['observer-auto']);
+ assert.equal(report.popupHolds[0].window.buttons[0].text,'닫기');
+});
 test('the game loop saves one 15-day archive, retries a failed write and preserves the usual reports', async () => {
  let day=0, now=1000000, writes=[], failed=false;
  const h=appHarness(name=>{

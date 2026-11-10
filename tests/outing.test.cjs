@@ -148,6 +148,12 @@ test('coffee drinking rejects the tagged coffee book and uses the native drink a
  assert.equal(w.writes[0][1].interaction_bag_id,'Object_Coffee_Drink');
 });
 
+test('shared orderable and coffee tags do not send a coffee wish to an unverified nightclub',async()=>{
+ const w=world({coffeeBook:true,cafeTags:['Coffee','Orderable','ClubAndLounge']});
+ assert.equal(await w.actions.pursueHope(w.member,w.character,w.decision,w.snapshot,at(10),600,1),false);
+ assert.equal(w.writes.length,0);
+});
+
 test('an explicit site wish waits for the current trip, and a teen returning home clears it',async()=>{
  const w=world({visit:true});
  w.member.age_group='HighTeen';

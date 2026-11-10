@@ -1,6 +1,6 @@
 (function () {
  'use strict';
- var VERSION='0.6.12', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.6.13', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var A=ObserverAgenda, R=ObserverRecovery, Rel=ObserverRelations, M=ObserverGoalMemory;
  var ChildCare=ObserverChildCare, Score=ObserverScoreboard, CP=ObserverCareerPath, Persona=ObserverPersona, Rot=ObserverRotation, Field=ObserverFieldCheck, Family=ObserverFamily, Why=ObserverWhy;
  var claims=Family.create(), nowMinute=NaN, popupTrack=null, expectedSelected=null, lastSelected=null;
@@ -384,7 +384,7 @@
  async function report(manual){
   var why={};
   members.forEach(function(m){var id=String(m.entity_id), p=state.people[id];if(p&&Number.isFinite(p.lastMinute))why[id]=Why.report(p,p.lastMinute,whyContext(m,id));});
-  var payload={why:why,fieldCheck:state.fieldCheck||null,rotation:state.rotation||null,score:Score.report(state),gameData:gameData.summary(),queueSample:state.queueSample||null,execTrail:state.execTrail||[],daily:state.daily||{},lastReturn:state.lastReturn||null,version:VERSION,created:new Date().toISOString(),enabled:state.enabled,scope:state.scope,background:state.background,household:state.household,status:status,game:lastGame,popup:blockedPopup,travel:state.travel,awayTravel:state.awayTravel,news:panels.latestNews(),members:members,snapshots:snapshots,decisions:state.people,capabilities:caps,logs:logs,last_cycle:lastCycle};
+  var payload={why:why,fieldCheck:state.fieldCheck||null,rotation:state.rotation||null,score:Score.report(state),gameData:gameData.summary(),queueSample:state.queueSample||null,execTrail:state.execTrail||[],daily:state.daily||{},lastReturn:state.lastReturn||null,version:VERSION,created:new Date().toISOString(),enabled:state.enabled,scope:state.scope,background:state.background,household:state.household,status:status,game:lastGame,popup:blockedPopup,popupHolds:state.popupHolds||[],travel:state.travel,awayTravel:state.awayTravel,news:panels.latestNews(),members:members,snapshots:snapshots,decisions:state.people,capabilities:caps,logs:logs,last_cycle:lastCycle};
   await cli('uimod.cfg_save',{mod_id:wf.MOD_ID,section:'ui/'+wf.APP_NAME+'/saved',key:manual?'observer-report':'observer-auto',value:JSON.stringify(payload)});
   lastReport=Date.now();return payload;
  }
@@ -407,6 +407,24 @@
    log('15일 자동 리포트 저장 / '+pending.key+'.cfg');
   }catch(e){
    log('15일 자동 리포트 저장 보류 · 1분 후 재시도 / '+e.message);
+  }
+ }
+ async function rememberPopupHold(popup){
+  var history=state.popupHolds||(state.popupHolds=[]);
+  var item={id:popup.popup_id,minute:nowMinute,at:new Date().toISOString(),desc:C.clean(popup.desc).slice(0,350),
+   buttons:(popup.buttons||[]).slice(0,8).map(function(b){return {key:b.list_key,text:C.clean(b.text).slice(0,100),dimmed:b.dimmed};})};
+  history.push(item);
+  if(history.length>8)history.shift();
+  if(item.id==='TeamProjectResultPopup'){
+   try{
+    var windows=await cli('ui.list_windows');
+    var visible=(windows.windows||[]).filter(function(w){return w.layer==='Popup';});
+    var target=visible.find(function(w){return w.ui_type===item.id;})||(visible.length===1?visible[0]:null);
+    if(!target)return;
+    var tree=await cli('ui.get_tree',{Window:target.window,max_nodes:40});
+    item.window={type:tree.ui_type,label:C.clean(tree.label),buttons:C.widgets(tree.nodes).filter(function(n){return n.role==='button'&&n.ref;}).slice(0,8)
+     .map(function(n){return {text:C.clean(n.text).slice(0,100),ref:n.ref,state:n.state};})};
+   }catch(_){}
   }
  }
  async function answerPopup(token,game){
@@ -471,7 +489,13 @@
    if(!button&&!picked)picked=C.popup(popup,row,{busy:!!unavailable});
    if(picked)button=picked.button;
    var replyArgs=protocol.popupArgs(popup,button);
-   if(!replyArgs){if(popupTries===1)log('자동 응답 보류: '+id+' / 선택의 효과를 확인할 수 없음');return;}
+   if(!replyArgs){
+    if(popupTries===1){
+     log('자동 응답 보류: '+id+' / 선택의 효과를 확인할 수 없음');
+     await rememberPopupHold(popup);
+    }
+    return;
+   }
    var confirm=await cli('ui.get_blocking');
    if((confirm.popups||[]).length!==1||!confirm.popups.some(function(p){return p.popup_id===id&&p.desc===popup.desc&&
      (p.buttons||[]).some(function(b){return b.list_key===button.list_key&&b.index===button.index&&b.text===button.text&&b.dimmed===false;});}))return;
@@ -749,6 +773,7 @@
    resetTimers(p,0);
    p.lastCareerMinute=undefined;p.idleSince=undefined;p.commutePending=false;
    p.goal=null;p.outing=null;p.scheduleChoice=null;p.lastAction=null;p.furnitureRetries={};p.wants=null;
+   p.mealAttempt=null;p.mealCooldown={};
    if(p.duty){p.duty.pending=null;p.duty.skip=null;}
   }
   p.lastMinute=minute;

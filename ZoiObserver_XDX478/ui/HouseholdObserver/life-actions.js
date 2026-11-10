@@ -143,8 +143,47 @@
    }
    return meals;
   }
+  function mealKey(bag,target){return bag+':'+target;}
+  function mealContinues(queue){
+   return queue.current&&/^Next_Food_(?:Start_Eat|CleanUp)(?:_|$)/i.test(queue.current.interaction_bag_id);
+  }
+  function mealAvailable(decision,action,target,minute){
+   var retry=decision.mealCooldown&&decision.mealCooldown[mealKey(action.interaction_bag_id,target)];
+   return !retry||minute<retry.at||minute>=retry.until;
+  }
+  function rememberNeed(decision,need,action,minute){
+   var receipt={key:need.key,bag:action.interaction_bag_id,target:String(action.observer_target),minute:minute,at:Date.now()};
+   decision.needPending=receipt;
+   if(need.key==='Hunger'){
+    receipt.before=need.pct;
+    decision.mealAttempt=receipt;
+   }
+  }
+  function reviewMeal(member,decision,snapshot,minute){
+   var p=decision.mealAttempt;
+   if(!p)return;
+   var hunger=snapshot.stats.stats.Hunger, pct=hunger&&hunger.pct, age=minute-p.minute;
+   if(!Number.isFinite(pct))return;
+   var key=mealKey(p.bag,p.target), old=decision.mealCooldown;
+   if(age>=0&&pct-p.before>=8){
+    if(old)delete old[key];
+    log(named(member)+': 식사 요청 뒤 배고픔 회복 확인 '+p.before+'% → '+pct+'%');
+   }else if(age>=0){
+    var action=R.actionState(snapshot.queue,p);
+    if(action==='queued'||action==='playing'||action==='unknown'&&age<90||mealContinues(snapshot.queue)||
+       R.awaitingStart(Date.now(),minute,p.at,p.minute))return;
+    var cooldown=decision.mealCooldown||(decision.mealCooldown={});
+    cooldown[key]={at:minute,until:minute+90};
+    Object.keys(cooldown).sort(function(a,b){return cooldown[b].at-cooldown[a].at;}).slice(6).forEach(function(k){delete cooldown[k];});
+    log(named(member)+': 식사 요청 뒤 배고픔 회복 미확인 · 다른 음식 확인 / '+p.bag);
+   }
+   decision.mealAttempt=null;
+   if(decision.needPending&&decision.needPending.at===p.at&&decision.needPending.bag===p.bag&&decision.needPending.target===p.target)
+    decision.needPending=null;
+  }
   async function needs(member,character,decision,snapshot,minute,token){
    // A bedtime need that could not be met here (no food, no toilet) is not chased: sleep goes ahead for 2 game hours.
+   reviewMeal(member,decision,snapshot,minute);
    var need=minute>=(decision.bedtimeSkip||0)||minute<(decision.bedtimeSkip||0)-120?L.bedtimeNeed(snapshot.stats.stats):L.urgentNeed(snapshot.stats.stats);
    var work=snapshot.work, location=entity(character.locatedSiteId), hunger=snapshot.stats.stats.Hunger;
    var atWork=work.is_at_work||work.is_working_time&&location>0&&location===work.work_site_id;
@@ -161,6 +200,11 @@
     var kept=decision.needPending;
     if(kept&&!(minute>=kept.minute&&minute-kept.minute<90))decision.needPending=null;
     return false;
+   }
+   if(need.key==='Hunger'&&(decision.mealAttempt||mealContinues(snapshot.queue))){
+    decision.needFallback=null;
+    if(decision.catLow&&decision.catLow.Hunger!=null)decision.catLow.Hunger=minute;
+    return true;
    }
    // 0.6.4: one fix per need at a time. In game (5x speed) the 25-minute retry came round every 10 real seconds,
    // before the Zoi had reached the fridge: soup, bibimbap and noodles were queued back to back and the
@@ -182,18 +226,20 @@
    if(local){
     var eligible=local.objects.filter(function(o){return L.fixtureMatches(need.key,o.table_id);});
     var ordered=closest(eligible,character,/.*/,5);
-    action=await objectAction(member,ordered,function(items){return L.needChoice(need.key,items);},token,null,onSite?{site:location,work:true}:null);
+    action=await objectAction(member,ordered,function(items,target){
+     return L.needChoice(need.key,need.key==='Hunger'?items.filter(function(a){return mealAvailable(decision,a,target,minute);}):items);
+    },token,null,onSite?{site:location,work:true}:null);
    }
    if(!action&&onSite&&need.key==='Hunger'){
     var meals=await carriedMeals(character);
-    action=await objectAction(member,meals,function(items){return items.find(function(a){
-     return a.enabled===true&&/^(?:Eat_|(?:Object_)?Food_Eat|Object_.*_Eat)/i.test(a.interaction_bag_id);
+    action=await objectAction(member,meals,function(items,target){return items.find(function(a){
+     return a.enabled===true&&mealAvailable(decision,a,target,minute)&&/^(?:Eat_|(?:Object_)?Food_Eat|Object_.*_Eat)/i.test(a.interaction_bag_id);
     });},token,null,{site:location,work:true,carried:true});
    }
    if(action){
     if(need.key==='Hunger')decision.noMeal=0;
     decision.needFallback=null;
-    decision.needPending={key:need.key,bag:action.interaction_bag_id,target:String(action.observer_target),minute:minute,at:Date.now()};
+    rememberNeed(decision,need,action,minute);
     var prefix=onSite?'근무지 내 ':prework?'출근 전 ':need.bedtime?'잠들기 전 ':'';
     log(named(member)+'의 '+prefix+((snapshot.stats.stat_names||{})[need.key]||need.key)+' 해결 요청: '+action.display_name);return true;
    }
@@ -216,16 +262,19 @@
    if(minute<(timers[need.key]||0))return false;
    timers[need.key]=minute+120;
    var waiting=decision.needPending;
+   if(need.key==='Hunger'&&(decision.mealAttempt||mealContinues(snapshot.queue)))return false;
    if(waiting&&waiting.key===need.key&&minute>=waiting.minute&&minute-waiting.minute<90)return false;
    var home=await homeMember(member,character);
    if(!(home>0)||entity(character.locatedSiteId)!==home)return false;
    var local=await inventory(member,character);
    if(!local)return false;
    var eligible=local.objects.filter(function(o){return L.fixtureMatches(need.key,o.table_id);});
-   var action=await objectAction(member,closest(eligible,character,/.*/,5),function(items){return L.needChoice(need.key,items);},token);
+   var action=await objectAction(member,closest(eligible,character,/.*/,5),function(items,target){
+    return L.needChoice(need.key,need.key==='Hunger'?items.filter(function(a){return mealAvailable(decision,a,target,minute);}):items);
+   },token);
    if(!action)return false;
    // 0.6.4: the early meal counts as the fix when the need turns urgent a moment later (in game: soup, then bibimbap 15 s on).
-   decision.needPending={key:need.key,bag:action.interaction_bag_id,target:String(action.observer_target),minute:minute,at:Date.now()};
+   rememberNeed(decision,need,action,minute);
    log(named(member)+': '+(snapshot.stats.stat_names&&snapshot.stats.stat_names[need.key]||need.key)+' '+need.pct+'% · 미리 해결 요청: '+action.display_name);
    return true;
   }
@@ -662,6 +711,8 @@
     var info=(await row('Site',site.id)).defaultInfo;
     if(!info||info.bDisabled||info.bDevOnly||!/^(?:Business|Public)$/.test(info.siteType))continue;
     var siteTags=info.tags||[];
+    if(condition.conditionId1==='Preference_Coffee'&&/DrinkCoffee/i.test(plan.name)&&!entry.hits[site.entity_id]&&
+       siteTags.some(function(tag){return /^(?:ClubAndLounge|TPO_Site_Workplace_ClubLounge)$/i.test(tag);}))continue;
     if(condition.conditionId1==='Ambition_Fishing'&&!entry.hits[site.entity_id]&&
        siteTags.some(function(tag){return /^FishingShop$/i.test(tag);}))continue;
     if(nativeTags.some(function(tag){return siteTags.indexOf(tag)<0;}))continue;

@@ -45,7 +45,7 @@ test('a meal that never showed up, or is 90 game minutes old, is requested again
   assert.equal(old.needPending, null);
 });
 
-function mealAt(site,{fridge=true,hidden=false,carried=false}={}){
+function mealAt(site,{fridge=true,hidden=false,carried=false,alternative=false}={}){
  const character={locatedSiteId:{value:site},inventoryEntityId:{value:12},worldTransform:{translation:{x:0,y:0,z:0}}};
  const mock=actions((name,args)=>{
   if(name==='entity.reflect'){
@@ -61,7 +61,7 @@ function mealAt(site,{fridge=true,hidden=false,carried=false}={}){
   if(name==='interaction.get_queue')return {queue_count:0};
   if(name==='interaction.list_available')return {interactions:[{
    interaction_bag_id:args.target_entity_id==='72'?'Eat_Served_Meal':'Eat_Fridge_Served_Soup',enabled:true,display_name:'먹기'
-  }]};
+  }].concat(alternative?[{interaction_bag_id:'Eat_Fridge_Served_Bibimbap',enabled:true,display_name:'비빔밥 먹기'}]:[])};
   throw Error(name);
  },{map_id:'Gangnam_Map',possessed_entity_id:1});
  return {...mock,character,member:{entity_id:1,household_id:10}};
@@ -94,6 +94,22 @@ test('a critical workplace meal can use the actor inventory without leaving or i
   stats:hungry,work,queue:{queue_count:0,current:{interaction_bag_id:'Work_Computer'}}
  },1000,'t'),false);
  assert.equal(working.writes.length,0);
+});
+
+test('a meal continuation is protected, and a meal with no measured gain gives way to a different meal',async()=>{
+ const h=mealAt(40,{alternative:true}), work={is_at_work:true,work_site_id:40,home_site_id:30}, d={};
+ const snap={stats:hungry,work,queue:{queue_count:0}};
+ assert.equal(await h.a.needs(h.member,h.character,d,snap,1000,'t'),true);
+ d.mealAttempt.at=Date.now()-60000;
+ snap.queue.current={interaction_bag_id:'Next_Food_Start_Eat',state:'Playing'};
+ assert.equal(await h.a.needs(h.member,h.character,d,snap,1070,'t'),true);
+ assert.equal(h.writes.length,1);
+ delete snap.queue.current;
+ assert.equal(await h.a.needs(h.member,h.character,d,snap,1080,'t'),true);
+ assert.deepEqual(h.writes.map(w=>w.interaction_bag_id),['Eat_Fridge_Served_Soup','Eat_Fridge_Served_Bibimbap']);
+ snap.stats={stats:{...hungry.stats,Hunger:{pct:54}}};
+ assert.equal(await h.a.needs(h.member,h.character,d,snap,1090,'t'),false);
+ assert.equal(d.mealAttempt,null);
 });
 
 test('names the game uses for other things are not invitations or parties', () => {
