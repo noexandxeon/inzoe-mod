@@ -195,3 +195,9 @@ test('two hopes leaving together stay unverified even when the goal review settl
   assert.equal(d.goalMemory[M.key(a)].phase, 'ended');
   assert.equal(d.goalMemory[M.key(b)].phase, 'ended');
 });
+
+test('0.6.14: the pending-action look follows game speed and repeated venue misses back off', () => {
+  const app = fs.readFileSync(path.join(ui, 'app.js'), 'utf8'), la = fs.readFileSync(path.join(ui, 'life-actions.js'), 'utf8');
+  assert.match(app, /var gap=gameSpeed>=4\?1200:gameSpeed>=2\?2000:3000;/);
+  assert.match(la, /Math\.min\(24,3\*Math\.pow\(2,/);
+});

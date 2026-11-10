@@ -1,6 +1,6 @@
 (function () {
  'use strict';
- var VERSION='0.6.13', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.6.14', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var A=ObserverAgenda, R=ObserverRecovery, Rel=ObserverRelations, M=ObserverGoalMemory;
  var ChildCare=ObserverChildCare, Score=ObserverScoreboard, CP=ObserverCareerPath, Persona=ObserverPersona, Rot=ObserverRotation, Field=ObserverFieldCheck, Family=ObserverFamily, Why=ObserverWhy;
  var claims=Family.create(), nowMinute=NaN, popupTrack=null, expectedSelected=null, lastSelected=null;
@@ -358,12 +358,15 @@
  }
  async function watchPending(game,token){
   var now=Date.now();
-  if(!state.enabled||token!==epoch||now-lastPendingPoll<3000)return;
+  // 0.6.14: at 5x speed a 3-second look at a requested action is 7 game minutes apart, so short actions (drink water,
+  // read a book) started and ended unseen: in game 9 hopes left right after their request and only 1 could be counted.
+  var gap=gameSpeed>=4?1200:gameSpeed>=2?2000:3000;
+  if(!state.enabled||token!==epoch||now-lastPendingPoll<gap)return;
   if(state.scope!=='played'&&!members.some(function(m){return String(m.entity_id)===String(game.possessed_entity_id);}))return;
   var oldest=Infinity, member=null;
   members.forEach(function(m){
    var id=String(m.entity_id), decision=state.people[id], sampled=queueSampleAt[id]||0;
-   if(!decision||sampled>=oldest||now-sampled<2500)return;
+   if(!decision||sampled>=oldest||now-sampled<gap-500)return;
    var action=decision.lastAction;
    if(decision.goal||action&&action.status!=='ended'&&now-action.at<120000){oldest=sampled;member=m;}
   });

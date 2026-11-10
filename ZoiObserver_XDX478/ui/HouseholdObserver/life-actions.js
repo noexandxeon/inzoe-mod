@@ -660,8 +660,11 @@
   function venueKey(condition){return (api.game().map_id||'')+':'+condition.conditionId1;}
   function venueNote(plan,condition,site,hit,minute){
    var book=venueBook(), key=venueKey(condition), entry=book[key]||(book[key]={hits:{},misses:{}});
-   if(hit){entry.hits[site]=minute;delete entry.misses[site];}
-   else entry.misses[site]=minute;
+   // 0.6.14: a place that keeps having nothing for this condition is retried less and less often
+   // (in game the library was visited for the same hope again every third day and never had the action).
+   var counts=entry.missCount||(entry.missCount={});
+   if(hit){entry.hits[site]=minute;delete entry.misses[site];delete counts[site];}
+   else{entry.misses[site]=minute;counts[site]=(counts[site]||0)+1;}
   }
   async function fishingGear(character,decision,minute){
    var previous=decision.fishingGear, pocket=entity(character.inventoryEntityId);
@@ -718,7 +721,8 @@
     if(nativeTags.some(function(tag){return siteTags.indexOf(tag)<0;}))continue;
     if(siteTags.indexOf('Resort_Room')>=0||siteTags.indexOf('Cahaya_DesertIsland')>=0)continue;
     var missed=entry.misses[site.entity_id];
-    if(missed&&minute-missed<3*1440)continue;
+    var again=Math.min(24,3*Math.pow(2,Math.max(0,((entry.missCount||{})[site.entity_id]||1)-1)));
+    if(missed&&minute-missed<again*1440)continue;
     var score=entry.hits[site.entity_id]?100:0;
     if(tags.some(function(group){return group.every(function(t){return siteTags.indexOf(t)>=0;});}))score+=50;
     if(hint&&hint.test(site.id))score+=60;
