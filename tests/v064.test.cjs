@@ -201,3 +201,13 @@ test('0.6.14: the pending-action look follows game speed and repeated venue miss
   assert.match(app, /var gap=gameSpeed>=4\?1200:gameSpeed>=2\?2000:3000;/);
   assert.match(la, /Math\.min\(24,3\*Math\.pow\(2,/);
 });
+
+test('0.6.15: without close ties the Zoi returns to the people it already knows best', () => {
+  const Rel = require(path.join(ui, 'relations.js'));
+  const st = (f, r, lf) => ({Friendship: {value: f, level: lf || 0}, Romance: {value: r, level: 0}});
+  const b = Rel.bonds([{target_id: 1, stats: st(5.39, 0)}, {target_id: 2, stats: st(-13.65, 0)}, {target_id: 3, stats: st(45, 0)},
+    {target_id: 4, is_family: true, stats: st(90, 0)}, {target_id: 5, stats: st(0, 0)}]);
+  assert.equal(b.close, 1, 'family and faint acquaintances are not close ties');
+  assert.deepEqual(Rel.bondOrder([{entity_id: 5}, {entity_id: 2}, {entity_id: 1}, {entity_id: 9}], b.favor).map(t => t.entity_id), [1, 5, 9]);
+  assert.equal(Rel.bonds([]).close, 0);
+});

@@ -1,6 +1,6 @@
 (function () {
  'use strict';
- var VERSION='0.6.14', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.6.15', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var A=ObserverAgenda, R=ObserverRecovery, Rel=ObserverRelations, M=ObserverGoalMemory;
  var ChildCare=ObserverChildCare, Score=ObserverScoreboard, CP=ObserverCareerPath, Persona=ObserverPersona, Rot=ObserverRotation, Field=ObserverFieldCheck, Family=ObserverFamily, Why=ObserverWhy;
  var claims=Family.create(), nowMinute=NaN, popupTrack=null, expectedSelected=null, lastSelected=null;
@@ -685,10 +685,22 @@
   var wantsRelationship=snapshot.hope.selected.some(function(h){return /StartRomance|MakeFriends|Lover|Friendship|Marri|Date/i.test(h.hope_id);})||
    (decision.goalPlans||[]).some(function(p){return p.conditions.some(function(c){return /TalkInteractionBagTag|NewRelationshipCount|RelationshipCount|Marriage/.test(c.conditionType);});});
   var socialNeed=stats.Society&&stats.Society.pct<=(outgoing?75:60);
-  if(!onlyGoal)decision.nextTalk=minute+(outgoing?75:120);
+  // Without two close ties the Zoi keeps building them: sooner, and with the people it already knows best.
+  var bond=decision.bond;
+  if(!bond||!(minute>=bond.at&&minute-bond.at<360)){
+   try{
+    var listed=await cli('relationships.list',{owner_id:String(member.entity_id)});
+    bond=Rel.bonds(listed.relationships);bond.at=minute;
+    if(bond.close<2&&!(decision.bond&&decision.bond.close<2))log(member.first_name+': 가까운 관계 '+bond.close+'명 · 아는 사람과 관계를 이어 갑니다');
+    decision.bond=bond;
+   }catch(_){bond=decision.bond||null;}
+  }
+  var building=!!bond&&bond.close<2;
+  if(!onlyGoal)decision.nextTalk=minute+(building?45:outgoing?75:120);
   var id=String(member.entity_id), book=lifeBook(), contacts=(book.contacts||{})[id]||{};
   try{
    var targets=await nearbyTargets(member,character);
+   if(building&&!onlyGoal)targets=Rel.bondOrder(targets,bond.favor);
    for(var i=0;i<targets.length;i++){
     var other=targets[i], targetId=String(other.entity_id), known=contacts[targetId];
     // Someone who reacted badly recently gets time; the Zoi looks for another person instead.
@@ -722,7 +734,7 @@
       await life.affection(member,other,decision,snapshot,available.interactions,relationship,minute,token):false;
      if(affectionate){decision.talkRequest={target:targetId,bag:affectionate.bag,at:minute};return true;}
     }
-    if(!related&&!wantsRelationship&&!socialNeed)continue;
+    if(!related&&!wantsRelationship&&!socialNeed&&!building)continue;
     var choice=related?related.action:conversationChoice(available.interactions,relationship,decision,targetId,minute);
     if(!choice)continue;
     if(choice.interaction_bag_id==='Co_Friendship_Positive_FocusSelection_Up2step'){
@@ -743,7 +755,7 @@
     return true;
    }
    // Nobody suitable around while lonely: go where people are.
-   if(!onlyGoal&&!gathering.waiting(decision)&&stats.Society&&stats.Society.pct<=35)
+   if(!onlyGoal&&!gathering.waiting(decision)&&stats.Society&&(stats.Society.pct<=35||building))
     return await life.socialOuting(member,character,decision,snapshot,{hour:Math.floor(minute%1440/60)},minute,token);
   }catch(e){log(member.first_name+': 대화 요청 보류 - '+e.message);}
   return false;
@@ -971,7 +983,7 @@
     run:function(){return attempt('외출',function(){return life.outing(m,character,p,snapshots[id],time,minute,token);});}},
    {key:'gather',label:'지인 초대·파티',base:26,bonus:lonely?25:0,eligible:!p.outing&&!p.goal&&!Family.hostBusy(state.people,members,m)&&ObserverGathering.due(p,time,minute),
     run:function(){return attempt('초대',function(){return gathering.host(m,character,p,snapshots[id],time,minute,token);});}},
-   {key:'social',label:'대화·관계',base:28,bonus:needs.Society&&needs.Society.pct<25?40:lonely?20:0,run:function(){return talk(m,character,p,minute,token,snapshots[id]);}},
+   {key:'social',label:'대화·관계',base:28,bonus:needs.Society&&needs.Society.pct<25?40:lonely?20:p.bond&&p.bond.close<2?22:0,run:function(){return talk(m,character,p,minute,token,snapshots[id]);}},
    {key:'career',label:'구직·이직',base:m.has_career?8:38,eligible:ChildCare.mayJoin(m,L),
     run:function(){return attempt('진로',function(){return career(m,p,time,minute,token,profile,work,queue);});}}
   ];
