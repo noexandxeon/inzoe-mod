@@ -1,8 +1,8 @@
 (function () {
  'use strict';
- var VERSION='0.5.8', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.5.9', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var A=ObserverAgenda, R=ObserverRecovery, Rel=ObserverRelations, M=ObserverGoalMemory;
- var ChildCare=ObserverChildCare, Score=ObserverScoreboard, CP=ObserverCareerPath, Persona=ObserverPersona, Rot=ObserverRotation;
+ var ChildCare=ObserverChildCare, Score=ObserverScoreboard, CP=ObserverCareerPath, Persona=ObserverPersona, Rot=ObserverRotation, Field=ObserverFieldCheck;
  var busy=false, epoch=0, index=0, cache={}, profiles={}, rows={}, members=[], lastReport=0;
  // Kept on window so a live update keeps the log history.
  var logs=window.ZoiObserverLogs||(window.ZoiObserverLogs=[]);
@@ -83,7 +83,7 @@
  }
  function esc(x){return String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
  function render(){
-  document.getElementById('status').textContent=(state.enabled?'[자동 관리] ':'[관찰 대기] ')+status;
+  document.getElementById('status').textContent=(state.enabled?'[자동 관리] ':'[관찰 대기] ')+status+(Field.line(state)?' · '+Field.line(state):'');
   var data=gameData.summary();
   document.getElementById('data-status').textContent=data.tableCount?
    '게임 데이터 · '+data.tableCount+'개 표 / 읽은 행 '+Object.values(data.queried).reduce(function(n,x){return n+x;},0)+'개':
@@ -361,7 +361,7 @@
   await life.reviewGoal(member,decision,{queue:queue},minute);
  }
  async function report(manual){
-  var payload={score:Score.report(state),gameData:gameData.summary(),queueSample:state.queueSample||null,execTrail:state.execTrail||[],daily:state.daily||{},lastReturn:state.lastReturn||null,version:VERSION,created:new Date().toISOString(),enabled:state.enabled,scope:state.scope,background:state.background,household:state.household,status:status,game:lastGame,popup:blockedPopup,travel:state.travel,awayTravel:state.awayTravel,news:panels.latestNews(),members:members,snapshots:snapshots,decisions:state.people,capabilities:caps,logs:logs,last_cycle:lastCycle};
+  var payload={fieldCheck:state.fieldCheck||null,rotation:state.rotation||null,score:Score.report(state),gameData:gameData.summary(),queueSample:state.queueSample||null,execTrail:state.execTrail||[],daily:state.daily||{},lastReturn:state.lastReturn||null,version:VERSION,created:new Date().toISOString(),enabled:state.enabled,scope:state.scope,background:state.background,household:state.household,status:status,game:lastGame,popup:blockedPopup,travel:state.travel,awayTravel:state.awayTravel,news:panels.latestNews(),members:members,snapshots:snapshots,decisions:state.people,capabilities:caps,logs:logs,last_cycle:lastCycle};
   await cli('uimod.cfg_save',{mod_id:wf.MOD_ID,section:'ui/'+wf.APP_NAME+'/saved',key:manual?'observer-report':'observer-auto',value:JSON.stringify(payload)});
   lastReport=Date.now();return payload;
  }
@@ -1069,6 +1069,17 @@
    if(members.length){
     try{await panels.readNews(time,token);}catch(e){if(cache.news!==e.message){cache.news=e.message;log('소식함 읽기 보류 / '+e.message);}}
     if(state.enabled)await rotateSelection(lastGame,gameMinute(time),token);
+    // One read-only question per turn about what could not be known without the game; answers go into the report.
+    if(state.enabled&&!(state.fieldCheck&&state.fieldCheck.version===VERSION&&state.fieldCheck.done)){
+     try{
+      var chosen=members.find(function(x){return String(x.entity_id)===String(lastGame.possessed_entity_id);})||members[0];
+      var where=chosen?await life.home(chosen,await cli('entity.reflect',{entity_id:String(chosen.entity_id)})):0;
+      var asked=await Field.run(state,VERSION,{minute:gameMinute(time),selected:String(lastGame.possessed_entity_id),home:where},cli,function(a){
+       return ObserverGathering.kindOf(a)||(CP.matches(CP.LEAVE,a)?'leave':CP.matches(CP.FOUND,a)?'found':CP.matches(CP.OPEN,a)?'open':null);
+      });
+      if(asked&&state.fieldCheck.done){log(Field.line(state));await report();}
+     }catch(e){if(cache.field!==e.message){cache.field=e.message;log('현장 점검 보류 / '+e.message);}}
+    }
     var member=members[(index++)%members.length];
     try{await inspect(member,time,token);}
     catch(e){log(member.first_name+': 관찰 보류 - '+e.message);}
