@@ -98,12 +98,12 @@ test('a missed day names its main reasons, and a met day names none', () => {
 
 test('old days are dropped and the report lists every retained day', () => {
  const state = {};
- for (let d = 0; d < 14; d++) S.event(state, {minute: d * 1440 + 600, zoi: 1, kind: 'request', key: 'r' + d});
+ for (let d = 0; d < 20; d++) S.event(state, {minute: d * 1440 + 600, zoi: 1, kind: 'request', key: 'r' + d});
  const report = S.report(state);
- assert.deepEqual(Object.keys(report.days).map(Number).sort((a, b) => a - b), [4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+ assert.deepEqual(Object.keys(report.days).map(Number).sort((a, b) => a - b), [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
  assert.equal(report.days['4'].events.length, 0);
- assert.equal(report.days['13'].events.length, 1);
- assert.equal(report.days['13'].people[0].requests, 1);
+ assert.equal(report.days['19'].events.length, 1);
+ assert.equal(report.days['19'].people[0].requests, 1);
 });
 
 test('a conversation never seen running still counts when the relationship measurably changed', () => {

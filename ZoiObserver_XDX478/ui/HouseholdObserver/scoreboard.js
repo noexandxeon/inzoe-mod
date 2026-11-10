@@ -3,7 +3,7 @@
  // Scoreboard (0.5.3): what actually happened, per Zoi and game day, as dated events.
  // A hope counts as completed only with the game's own mission evidence, and only once.
  // Stored in wf.state.score so it travels with the save. Nothing here issues game commands.
- var TARGET=5, KEEP_DAYS=10, EVENT_DAYS=2, MAX_EVENTS=120, MAX_SEEN=400;
+ var TARGET=5, PERIOD_DAYS=15, KEEP_DAYS=PERIOD_DAYS+1, EVENT_DAYS=2, MAX_EVENTS=120, MAX_SEEN=400;
  var DANGER={Toilet:24,Hunger:24,Sleep:24,Cleanliness:18};
  var SHORTFALL={
   offered:'게임이 준 소망이 적음',skill:'기술 준비 중인 소망',busy:'출근·수면 시간이 김',missing:'필요한 물건·장소·상대 없음',
@@ -19,7 +19,8 @@
  }
  function dayOf(minute){return Math.floor(minute/1440);}
  function person(state,minute,zoi){
-  var s=book(state), key=String(dayOf(minute)), day=s.days[key]||(s.days[key]={people:{},events:[]});
+  var s=book(state), key=String(dayOf(minute)), day=s.days[key];
+  if(!day){day=s.days[key]={people:{},events:[]};prune(state);}
   var id=String(zoi), p=day.people[id];
   if(!p)p=day.people[id]={completed:0,ambition:0,gone:0,expired:0,requests:0,failed:0,outings:0,outingFound:0,
    offered:0,first:minute,last:minute,minutes:{work:0,sleep:0,free:0,danger:0},low:{},reasons:{},watch:{max:0,sum:0,n:0}};
@@ -110,6 +111,7 @@
  function observe(state,minute,zoi,info,now){
   var s=book(state), slot=person(state,minute,zoi), p=slot.p;
   var marks=s.marks||(s.marks={}), id=String(zoi), mark=marks[id];
+  p.samples=(p.samples||0)+1;
   var span=mark&&minute>mark.minute?Math.min(minute-mark.minute,30):0;
   var stats=info&&info.stats||{}, danger=false;
   Object.keys(DANGER).forEach(function(k){
@@ -225,7 +227,7 @@
   }
   return {day:day,zoi:String(zoi),completed:p.completed,target:TARGET,met:p.completed>=TARGET,ambition:p.ambition,
    offered:p.offered,gone:p.gone,expired:p.expired,requests:p.requests,failed:p.failed,outings:p.outings,outingFound:p.outingFound,
-   minutes:p.minutes,low:p.low,partial:partial,observedMinutes:observed,
+   minutes:p.minutes,low:p.low,partial:partial,observedMinutes:observed,samples:p.samples||0,
    watchSeconds:p.watch.n?{average:Math.round(p.watch.sum/p.watch.n/100)/10,max:Math.round(p.watch.max/100)/10}:null,
    shortfall:reasons.slice(0,3)};
  }
@@ -238,15 +240,85 @@
   return text;
  }
  // For Report: every retained day with one summary per Zoi and the recent raw events.
- function report(state){
+ function report(state,fromDay,toDay){
   var s=book(state), out={target:TARGET,days:{}};
   Object.keys(s.days).forEach(function(key){
+   var day=Number(key);
+   if((fromDay!==undefined&&day<fromDay)||(toDay!==undefined&&day>=toDay))return;
    var d=s.days[key];
    out.days[key]={people:Object.keys(d.people).map(function(id){return summary(state,Number(key),id);}),events:d.events,house:d.house||null};
   });
   return out;
  }
- var api={house:house,unattended:unattended,houseLine:houseLine,TARGET:TARGET,memory:memory,event:event,observe:observe,hopes:hopes,hopesChanged:hopesChanged,summary:summary,line:line,report:report,dayOf:dayOf};
+ // Use full calendar days so neighboring reports never share a day.
+ function period(state,minute,scope,household){
+  var day=dayOf(minute);
+  var run=state.periodicScore;
+  if(!run||run.scope!==scope||run.household!==household||day<run.lastDay){
+   run=state.periodicScore={scope:scope,household:household,fromDay:day+1};
+  }
+  run.lastDay=day;
+  return run;
+ }
+ function periodSummary(state,fromDay,toDay){
+  var s=book(state), people={}, daysWithoutObservations=[];
+  var house={popups:0,popupAuto:0,popupUser:0,popupLongest:0,stops:0,selections:0,duplicates:0};
+  for(var day=fromDay;day<toDay;day++){
+   var record=s.days[String(day)], observed=false;
+   Object.keys(record&&record.people||{}).forEach(function(id){
+    var p=record.people[id], r=summary(state,day,id);
+    var total=people[id]||(people[id]={zoi:id,observedDays:0,partialDays:0,daysAtTarget:0,
+     completed:0,offered:0,expired:0,unverified:0,ambition:0,failed:0,dangerMinutes:0,watchMaxSeconds:null,blockers:{}});
+    if(p.samples){
+     observed=true;
+     total.observedDays++;
+     if(r.partial)total.partialDays++;
+     else if(r.met)total.daysAtTarget++;
+    }
+    total.completed+=r.completed;total.offered+=r.offered;total.expired+=r.expired;total.unverified+=r.gone;
+    total.ambition+=r.ambition;total.failed+=r.failed;total.dangerMinutes+=r.minutes.danger;
+    if(r.watchSeconds)total.watchMaxSeconds=Math.max(total.watchMaxSeconds||0,r.watchSeconds.max);
+    Object.keys(p.reasons).forEach(function(reason){
+     total.blockers[reason]=(total.blockers[reason]||0)+p.reasons[reason];
+    });
+   });
+   if(!observed)daysWithoutObservations.push(day);
+   if(record&&record.house)Object.keys(house).forEach(function(k){
+    var value=record.house[k]||0;
+    house[k]=k==='popupLongest'?Math.max(house[k],value):house[k]+value;
+   });
+  }
+  var zois=Object.values(people).map(function(p){
+   p.daysWithoutObservations=toDay-fromDay-p.observedDays;
+   p.blockers=Object.keys(p.blockers).map(function(kind){
+    return {kind:kind,label:SHORTFALL[kind]||(kind==='stalled'?'목표 정체':kind),records:p.blockers[kind]};
+   }).sort(function(a,b){return b.records-a.records;});
+   return p;
+  });
+  return {fromDay:fromDay,toDayExclusive:toDay,daysWithoutObservations:daysWithoutObservations,people:zois,house:house};
+ }
+ function dueReport(state,minute,scope,household,now){
+  if(!Number.isFinite(minute))return null;
+  var run=period(state,minute,scope,String(household)), day=dayOf(minute), end=run.fromDay+PERIOD_DAYS;
+  if(run.pending)return run.pending;
+  if(day<end)return null;
+  var range=periodSummary(state,run.fromDay,end);
+  if(range.daysWithoutObservations.length===PERIOD_DAYS){
+   run.fromDay=day;
+   return null;
+  }
+  var id=String(household).replace(/[^a-z0-9_-]/gi,'_');
+  run.pending={key:'observer-15d-'+id+'-'+run.fromDay+'-'+(end-1)+'-'+now,
+   range:range,score:report(state,run.fromDay,end)};
+  return run.pending;
+ }
+ function reportSaved(state,pending){
+  var run=state.periodicScore;
+  if(!run||run.pending!==pending)return;
+  run.fromDay=pending.range.toDayExclusive;
+  delete run.pending;
+ }
+ var api={dueReport:dueReport,reportSaved:reportSaved,PERIOD_DAYS:PERIOD_DAYS,house:house,unattended:unattended,houseLine:houseLine,TARGET:TARGET,memory:memory,event:event,observe:observe,hopes:hopes,hopesChanged:hopesChanged,summary:summary,line:line,report:report,dayOf:dayOf};
  if(typeof module!=='undefined'&&module.exports)module.exports=api;
  else root.ObserverScoreboard=api;
 })(this);
