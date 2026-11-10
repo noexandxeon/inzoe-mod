@@ -123,7 +123,8 @@
    return home>0?home:0;
   }
   async function needs(member,character,decision,snapshot,minute,token){
-   var need=L.urgentNeed(snapshot.stats.stats);
+   // A bedtime need that could not be met here (no food, no toilet) is not chased: sleep goes ahead for 2 game hours.
+   var need=minute>=(decision.bedtimeSkip||0)||minute<(decision.bedtimeSkip||0)-120?L.bedtimeNeed(snapshot.stats.stats):L.urgentNeed(snapshot.stats.stats);
    if(!need){
     decision.needFallback=null;
     // Kept while fresh: an early (routine) request still counts if the need turns urgent before it is eaten.
@@ -154,10 +155,11 @@
      if(need.key==='Hunger')decision.noMeal=0;
      decision.needFallback=null;
      decision.needPending={key:need.key,bag:action.interaction_bag_id,target:String(action.observer_target),minute:minute,at:Date.now()};
-     log(named(member)+'의 '+(snapshot.stats.stat_names[need.key]||need.key)+' 해결 요청: '+action.display_name);return true;
+     log(named(member)+'의 '+(need.bedtime?'잠들기 전 ':'')+(snapshot.stats.stat_names[need.key]||need.key)+' 해결 요청: '+action.display_name);return true;
     }
     if(need.key==='Hunger'&&location===home)decision.noMeal=minute+40;
    }
+   if(need.bedtime){decision.bedtimeSkip=minute+120;decision.nextNeed=minute;return false;}
    if(home>0&&location!==home&&(need.key!=='Cleanliness'||need.pct<=12)&&await move(member,home,token)){
     if(decision.outing&&decision.outing.goalVisit)decision.outing=null;
     decision.needFallback=null;

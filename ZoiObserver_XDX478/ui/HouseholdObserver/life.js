@@ -30,6 +30,18 @@
    .filter(function(n){return n.pct!==null&&n.pct<=(n.key==='Cleanliness'?18:24);})
    .sort(function(a,b){return a.pct-b.pct;})[0]||null;
  }
+ // 0.6.7: in game the Zoi was sent to bed with hunger and toilet half empty and woke with hunger 3%,
+ // toilet 15% and hygiene 7% at once (day 1008). Before a sleep that is not yet an emergency, the need
+ // that would not last the night is handled first.
+ function bedtimeNeed(stats){
+  var first=urgentNeed(stats);
+  if(!first||first.key!=='Sleep'||first.pct<=8)return first;
+  var before=[{key:'Toilet',limit:45},{key:'Hunger',limit:55}]
+   .map(function(n){return {key:n.key,pct:percent(stats,n.key),limit:n.limit,bedtime:true};})
+   .filter(function(n){return n.pct!==null&&n.pct<=n.limit;})
+   .sort(function(a,b){return a.pct/a.limit-b.pct/b.limit;})[0];
+  return before||first;
+ }
  function relaxed(queue){
   var bag=queue.current&&queue.current.interaction_bag_id;
   return (queue.queue_count||0)===0&&(!bag||
@@ -301,7 +313,7 @@
    .sort(function(a,b){return a.pct-b.pct;})[0]||null;
  }
 
- var api={itemForTag:itemForTag,tripReady:tripReady,objectHints:objectHints,QUEUE_LIMIT:QUEUE_LIMIT,TRAVEL:TRAVEL,adultAge:adultAge,goalVenueIds:goalVenueIds,goalReady:goalReady,urgentNeed:urgentNeed,routineNeed:routineNeed,goalHomeItem:goalHomeItem,relaxed:relaxed,fixtureMatches:fixtureMatches,needChoice:needChoice,goalVenueTags:goalVenueTags,
+ var api={itemForTag:itemForTag,tripReady:tripReady,objectHints:objectHints,QUEUE_LIMIT:QUEUE_LIMIT,TRAVEL:TRAVEL,adultAge:adultAge,goalVenueIds:goalVenueIds,goalReady:goalReady,urgentNeed:urgentNeed,bedtimeNeed:bedtimeNeed,routineNeed:routineNeed,goalHomeItem:goalHomeItem,relaxed:relaxed,fixtureMatches:fixtureMatches,needChoice:needChoice,goalVenueTags:goalVenueTags,
   relationshipEntry:relationshipEntry,relationshipStage:relationshipStage,hasOtherPartner:hasOtherPartner,
   romanceChoice:romanceChoice,dayBudget:dayBudget,ledgerCheckpoint:ledgerCheckpoint,matchingDebit:matchingDebit,debitCount:debitCount,
   entrepreneur:entrepreneur,sideJobs:sideJobs,housingChoice:housingChoice,

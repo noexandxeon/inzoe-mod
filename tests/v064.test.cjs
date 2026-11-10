@@ -102,3 +102,14 @@ test('an early meal request is remembered when hunger turns urgent', async () =>
   assert.equal(await a.needs({entity_id: 1}, {}, d, {stats: hungry, queue: {queue_count: 1, entries: null}, work: {}}, 1020, 't'), true);
   assert.deepEqual(calls, []);
 });
+
+test('before a sleep that is not an emergency, hunger and toilet are handled first', () => {
+  const s = (h, t, sl, c) => ({Hunger: {pct: h}, Toilet: {pct: t}, Sleep: {pct: sl}, Cleanliness: {pct: c}});
+  assert.equal(L.bedtimeNeed(s(40, 80, 20, 80)).key, 'Hunger');
+  assert.equal(L.bedtimeNeed(s(40, 80, 20, 80)).bedtime, true);
+  assert.equal(L.bedtimeNeed(s(50, 20, 20, 80)).key, 'Toilet');
+  assert.equal(L.bedtimeNeed(s(80, 80, 20, 80)).key, 'Sleep');
+  assert.equal(L.bedtimeNeed(s(40, 40, 6, 80)).key, 'Sleep', 'about to pass out: bed first');
+  assert.equal(L.bedtimeNeed(s(80, 80, 80, 80)), null);
+  assert.equal(L.bedtimeNeed(s(10, 80, 20, 80)).key, 'Hunger');
+});
