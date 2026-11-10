@@ -1,6 +1,6 @@
 (function () {
  'use strict';
- var VERSION='0.5.4', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.5.5', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var A=ObserverAgenda, R=ObserverRecovery, Rel=ObserverRelations, M=ObserverGoalMemory;
  var ChildCare=ObserverChildCare, Score=ObserverScoreboard;
  var busy=false, epoch=0, index=0, cache={}, profiles={}, rows={}, members=[], lastReport=0;
@@ -50,6 +50,10 @@
    Score.event(state,{minute:minute,zoi:id,kind:'request',name:plan.name});
   },
   active:function(token){return state.enabled&&token===epoch;}});
+ var gathering=ObserverGathering.create({cli:cli,write:write,log:log,L:L,Rel:Rel,
+  life:function(){return lifeBook();},members:function(){return members;},game:function(){return lastGame;},
+  home:function(member,character){return life.home(member,character);},
+  score:function(e){Score.event(state,e);}});
  var panels=ObserverPanels.create({cli:cli,write:write,log:log,state:state,game:function(){return lastGame;},
   background:function(){return state.background;},
   active:function(token){return state.enabled&&token===epoch;}});
@@ -114,6 +118,7 @@
    var people=Rel.describe(state.life||{},id,now);
    if(people.length)html+='<p class="help">관계: '+esc(people.map(function(c){
     return c.name+(c.reason?' · '+c.reason:'')+(c.next?' · 다음 '+clock(c.next):'');}).join(' / '))+'</p>';
+   if(p.gather&&p.gather.status)html+='<p>초대·파티 · '+esc(p.gather.status)+'</p>';
    if(p.repairStatus)html+='<p>집 수리 · '+esc(p.repairStatus)+'</p>';
    if(p.marketStatus)html+='<p>포켓마켓 · '+esc(p.marketStatus)+'</p>';
    if(p.goalPlans&&p.goalPlans.length)html+='<p>소망 (만료가 가까운 순)</p>'+p.goalPlans.map(function(g,i){
@@ -636,7 +641,7 @@
     return true;
    }
    // Nobody suitable around while lonely: go where people are.
-   if(!onlyGoal&&stats.Society&&stats.Society.pct<=35)
+   if(!onlyGoal&&!gathering.waiting(decision)&&stats.Society&&stats.Society.pct<=35)
     return await life.socialOuting(member,character,decision,snapshot,{hour:Math.floor(minute%1440/60)},minute,token);
   }catch(e){log(member.first_name+': 대화 요청 보류 - '+e.message);}
   return false;
@@ -698,6 +703,7 @@
   if(cache[id]!==note){cache[id]=note;log(m.first_name+': '+note);}
   if(!state.enabled||token!==epoch||!sameCity)return;
   await keepScore(m,p,hope,stats,work,sleeping,minute);
+  try{await gathering.review(m,p,minute);}catch(e){log(m.first_name+': 초대 확인 보류 / '+e.message);}
   try{await life.reviewGoal(m,p,snapshots[id],minute);}
   catch(e){log(m.first_name+': 목표 결과 확인 보류 - '+e.message);}
   if(sleeping){p.wasSleeping=true;return;}
@@ -798,8 +804,10 @@
    {key:'clean',label:'집 청소',base:30,duringGoal:true,run:function(){return attempt('청소',function(){return life.clean(m,character,p,snapshots[id],minute,token);});}},
    {key:'side',label:'생활비 보충',base:55,eligible:!!(p.lifePlan&&p.lifePlan.short),
     run:function(){return attempt('부수입',function(){return life.sideIncome(m,character,p,p.lifePlan,snapshots[id],skills,minute,token);});}},
-   {key:'outing',label:'여가 외출',base:15,long:true,eligible:!p.outing,
+   {key:'outing',label:'여가 외출',base:15,long:true,eligible:!p.outing&&!gathering.waiting(p),
     run:function(){return attempt('외출',function(){return life.outing(m,character,p,snapshots[id],time,minute,token);});}},
+   {key:'gather',label:'지인 초대·파티',base:26,bonus:lonely?25:0,eligible:!p.outing&&!p.goal&&ObserverGathering.due(p,time,minute),
+    run:function(){return attempt('초대',function(){return gathering.host(m,character,p,snapshots[id],time,minute,token);});}},
    {key:'social',label:'대화·관계',base:28,bonus:needs.Society&&needs.Society.pct<25?40:lonely?20:0,run:function(){return talk(m,character,p,minute,token,snapshots[id]);}},
    {key:'career',label:'구직·이직',base:m.has_career?8:38,eligible:ChildCare.mayJoin(m,L),
     run:function(){return attempt('진로',function(){return career(m,p,time,minute,token,profile,work,queue);});}}
@@ -1083,7 +1091,7 @@
   members=[];playedGroups=[];rosterMap='';
   lastPendingPoll=0;queueSampleAt={};
   lastPopup=null;blockedPopup=null;popupTries=0;nextPopupTry=0;scheduleCancel=null;
-  life.reset();panels.reset();care.reset();
+  life.reset();panels.reset();care.reset();gathering.reset();
   pendingResume=true;pausedUntil=0;errors=0;firstError=0;
   log('저장된 관찰 설정을 불러왔습니다. 목표와 현재 게임 상태를 다시 확인합니다.');
  };

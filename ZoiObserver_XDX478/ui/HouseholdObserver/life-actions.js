@@ -1443,7 +1443,7 @@
   return {reset:reset,needs:needs,routine:routine,clean:clean,repair:repair,parcels:parcels,marketNeed:marketNeed,reviewGoal:reviewGoal,trackGoal:trackGoal,prepareGoals:prepareGoals,attend:attend,
    pursueHope:pursueHope,prepareAmbition:prepareAmbition,pursueAmbition:pursueAmbition,
    affection:affection,goalConversation:goalConversation,meetForGoal:meetForGoal,
-   occupation:occupation,sideIncome:sideIncome,outing:outing,socialOuting:socialOuting,ensureTraining:ensureTraining,vacation:vacation,householdPlan:householdPlan,furnish:furnish,move:move};
+   occupation:occupation,sideIncome:sideIncome,outing:outing,socialOuting:socialOuting,ensureTraining:ensureTraining,vacation:vacation,householdPlan:householdPlan,furnish:furnish,move:move,home:homeMember};
  }
  root.ObserverLifeActions={create:create};
 })(this);
