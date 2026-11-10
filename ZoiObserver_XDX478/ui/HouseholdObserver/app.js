@@ -1,8 +1,8 @@
 (function () {
  'use strict';
- var VERSION='0.5.7', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.5.8', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var A=ObserverAgenda, R=ObserverRecovery, Rel=ObserverRelations, M=ObserverGoalMemory;
- var ChildCare=ObserverChildCare, Score=ObserverScoreboard, CP=ObserverCareerPath, Persona=ObserverPersona;
+ var ChildCare=ObserverChildCare, Score=ObserverScoreboard, CP=ObserverCareerPath, Persona=ObserverPersona, Rot=ObserverRotation;
  var busy=false, epoch=0, index=0, cache={}, profiles={}, rows={}, members=[], lastReport=0;
  // Kept on window so a live update keeps the log history.
  var logs=window.ZoiObserverLogs||(window.ZoiObserverLogs=[]);
@@ -73,6 +73,7 @@
   '<p class="help">Start: 현재 가구 / Played: 플레이한 가구들 / Stop: 중지 / Report: 진단 저장</p>'+
   '<p class="help" id="data-status"></p><p class="help">창 복구 Ctrl+Shift+O</p>'+
   '<p class="help"><button id="background" aria-pressed="true"></button><span id="mode-note"></span></p>'+
+  '<p class="help"><button id="rotate" aria-pressed="true"></button><span id="rotate-note"></span></p>'+
   '<div id="people"></div><p id="news"></p><p class="limit">욕구·수리·택배·소망 / 소식·일정 / 취향·관계</p>'+
   '<div id="log"></div>';
  function log(message){
@@ -90,6 +91,10 @@
   var toggle=document.getElementById('background');
   toggle.textContent='다른 작업 모드 '+(state.background?'켜짐':'꺼짐');
   toggle.setAttribute('aria-pressed',String(state.background));
+  var rotate=document.getElementById('rotate'), rotation=Rot.book(state);
+  rotate.textContent='가족 순환 선택 '+(rotation.on?'켜짐':'꺼짐');
+  rotate.setAttribute('aria-pressed',String(rotation.on));
+  document.getElementById('rotate-note').textContent=rotation.on?'선택이 필요한 가족에게 자동으로 전환':'선택한 조이만 화면 작업';
   document.getElementById('mode-note').textContent=state.background?'마우스 입력이 필요한 작업은 대기':'게임 화면 입력 허용';
   document.getElementById('people').innerHTML=members.map(function(m){
    var id=String(m.entity_id), s=snapshots[id], p=state.people[id]||{};
@@ -654,13 +659,34 @@
   }catch(e){log(member.first_name+': 대화 요청 보류 - '+e.message);}
   return false;
  }
+ // Moves the selection to a family member who is waiting on it. Confirmed by the game's own answer;
+ // two failures in a row rest the feature for a game day.
+ async function rotateSelection(game,minute,token){
+  var blocked=!!(state.travel||state.awayTravel||panels.borrowing()||game.blocking&&(game.blocking.popup_count>0||game.blocking.blocked));
+  var pick=Rot.choose(state,members,game.possessed_entity_id,minute,blocked);
+  if(!pick)return false;
+  var who=members.find(function(m){return String(m.entity_id)===pick;}), why=state.people[pick].wants.why;
+  try{
+   // Same command the phone replies already use to borrow the selection.
+   await write('character.possess',{character_id:pick},token,null,String(game.possessed_entity_id));
+   var now=await cli('game.get_state');
+   if(String(now.possessed_entity_id)!==pick)throw Error('게임에 반영되지 않음');
+   lastGame=now;Rot.moved(state,minute);
+   log('가족 순환 선택: '+who.first_name+' ('+why+')');
+   return true;
+  }catch(e){
+   var rest=Rot.failed(state,minute);
+   log('가족 순환 선택 보류 / '+e.message+(rest?' · 하루 동안 쉽니다':''));
+   return false;
+  }
+ }
  async function inspect(m,time,token){
   var id=String(m.entity_id), args={entity_id:id}, p=state.people[id]||(state.people[id]={firstDay:time.day});
   var minute=time.day*1440+time.hour*60+time.minute;
   if(p.lastMinute>minute){
    resetTimers(p,0);
    p.lastCareerMinute=undefined;p.idleSince=undefined;p.commutePending=false;
-   p.goal=null;p.outing=null;p.scheduleChoice=null;p.lastAction=null;p.furnitureRetries={};
+   p.goal=null;p.outing=null;p.scheduleChoice=null;p.lastAction=null;p.furnitureRetries={};p.wants=null;
   }
   p.lastMinute=minute;
   var character=await cli('entity.reflect',args);
@@ -709,6 +735,13 @@
   if(sleeping)note='수면 중 · 깨어난 뒤 미처리 행동 재평가';
   snapshots[id]={sampled_at:new Date().toISOString(),stats:stats,queue:queue,hope:hope,work:work,autonomy:auto,trait:profile.trait,note:note};
   if(cache[id]!==note){cache[id]=note;log(m.first_name+': '+note);}
+  // 0.5.8: note when this unselected family member is waiting on something only the selected Zoi can do.
+  var chosen=String(lastGame.possessed_entity_id)===id, site=character.locatedSiteId&&character.locatedSiteId.value;
+  Rot.note(p,Rot.wants({selected:chosen,away:!sameCity,dependent:dependent||ghost,autonomyOff:auto.value===false,
+   urgent:!sleeping&&['Toilet','Hunger','Sleep','Cleanliness'].some(function(k){return C.catDonut(k,stats.stats[k]);}),
+   blind:!sleeping&&!work.is_at_work&&site>0&&!life.knowsSite(site)&&!!((p.goalPlans||[]).length||p.ambition),
+   replies:!!p.pendingReplies}),minute);
+  if(chosen&&p.wants)p.wants=null;
   if(!state.enabled||token!==epoch||!sameCity)return;
   await keepScore(m,p,hope,stats,work,sleeping,minute);
   try{await vocation.review(m,p,minute);}catch(e){log(m.first_name+': 진로 확인 보류 / '+e.message);}
@@ -1035,6 +1068,7 @@
    status=(state.scope==='played'?'플레이한 '+familyCount+'가구':(household.name||'현재')+' 가구')+' / '+members.length+'명 / '+time.day+'일 '+time.hour+':'+('0'+time.minute).slice(-2);
    if(members.length){
     try{await panels.readNews(time,token);}catch(e){if(cache.news!==e.message){cache.news=e.message;log('소식함 읽기 보류 / '+e.message);}}
+    if(state.enabled)await rotateSelection(lastGame,gameMinute(time),token);
     var member=members[(index++)%members.length];
     try{await inspect(member,time,token);}
     catch(e){log(member.first_name+': 관찰 보류 - '+e.message);}
@@ -1101,6 +1135,13 @@
    p.nextTaste=p.nextPhoneAction=p.nextMarket=0;
   });
   log(state.background?'다른 작업 모드 켜짐. 게임 내부 동작으로 처리합니다.':'다른 작업 모드 꺼짐. 대기 중인 화면 작업을 다시 확인합니다.');
+  if(state.enabled)saveMirror(true);
+ };
+ document.getElementById('rotate').onclick=function(){
+  var r=Rot.book(state);
+  r.on=!r.on;r.fails=0;r.blockedUntil=0;
+  log(r.on?'가족 순환 선택 켜짐. 선택이 필요한 가족에게 자동으로 전환합니다.':'가족 순환 선택 꺼짐.');
+  render();
   if(state.enabled)saveMirror(true);
  };
  document.getElementById('stop').onclick=function(){
