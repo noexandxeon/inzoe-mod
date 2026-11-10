@@ -176,6 +176,7 @@
     }
    }
    var onSite=schoolSite||workSite;
+   book.schoolSite=schoolSite?site:0;
    if(!mayAct)return onSite;
    var queue=snapshot.queue, pending=book.pending;
    if(pending){
@@ -190,7 +191,7 @@
    }
    var candidates=active.filter(function(task){return task.kind==='homework'?!onSite&&!work.is_working_time&&!work.is_commute_time:
     task.kind==='school'?schoolSite:workSite;});
-   if(!candidates.length||queue.queue_count>0||!L.goalReady(queue,work))return onSite;
+   if(!candidates.length||queue.queue_count>0||!L.goalReady(queue,work))return workSite&&!schoolSite;
    var career=(await reflect(id,'Career')).careerSlots||{}, missions=(await reflect(id,'Mission')).missionMap||{};
    // Earliest deadline first, but three assignments with nothing to do must not hide a later one that can run.
    var from=(book.turn||0)%candidates.length;
@@ -199,7 +200,7 @@
    }
    book.turn=candidates.length>3?from+3:0;
    book.note='기한 과제에 맞는 실행 가능 행동을 찾는 중';
-   return onSite;
+   return workSite&&!schoolSite;
   }
   return {run:run};
  }

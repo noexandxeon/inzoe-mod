@@ -70,7 +70,7 @@
     return {object:o,dist:Math.hypot(w.x-position.x,w.y-position.y,w.z-position.z)};
    }).sort(function(a,b){return a.dist-b.dist;}).slice(0,limit||5).map(function(o){return o.object;});
   }
-  async function objectAction(member,objects,choose,token,offers){
+  async function objectAction(member,objects,choose,token,offers,schoolSite){
    var id=String(member.entity_id);
    for(var i=0;i<objects.length;i++){
     var target=String(objects[i].entity_id), available, self=target===id;
@@ -94,6 +94,12 @@
       !(playing&&playing.interaction_bag_id===a.interaction_bag_id&&String(playing.target_entity_id)===target);
     }),target);
     if(!action)continue;
+    if(schoolSite){
+     try{if(entity((await readAt(target)).locatedSiteId)!==schoolSite)continue;}
+     catch(_){continue;}
+     if(entity((await readAt(id)).locatedSiteId)!==schoolSite||
+        !L.relaxed(await cli('interaction.get_queue',{entity_id:id})))return null;
+    }
     var run={entity_id:id,interaction_bag_id:action.interaction_bag_id};
     // In game the Self_ action only counted with target=self (야망 2/3); without a target it queued but never ran.
     run.target_entity_id=target;
@@ -619,6 +625,15 @@
    decision.nextHopeAction=minute+18;
    return pursuePlans(member,character,decision,snapshot,time,minute,token,plans,tryConversation);
   }
+  async function pursueSchoolHope(member,character,decision,snapshot,time,minute,token,site){
+   if(decision.goal||!L.relaxed(snapshot.queue)||minute<(decision.nextSchoolHope||0))return false;
+   var plans=await prepareGoals(member,decision,minute,snapshot.hope.selected);
+   if(!plans.length)return false;
+   decision.nextSchoolHope=minute+15;
+   var sent=await pursuePlans(member,character,decision,snapshot,time,minute,token,plans,null,site);
+   decision.schoolHopeNote=sent?'학교 안에서 소망 행동 요청':'학교에서 지금 실행 가능한 소망 행동 없음';
+   return sent;
+  }
   async function prepareAmbition(member,decision,minute){
    if(minute<(decision.nextAmbition||0))return decision.ambition;
    decision.nextAmbition=minute+20;
@@ -683,8 +698,8 @@
     /Read|Book/i.test(id)?/Book|Shelf|Tablet|Chair|Sofa|Computer/i:/.*/;
   }
   var relationTypes=/^(?:Marriage|NewRelationshipCount|RelationshipCount|TalkInteractionBagTag|InteractionBagCountAtFamilyRelationshipType)$/;
-  async function pursuePlans(member,character,decision,snapshot,time,minute,token,plans,tryConversation){
-   var local, nearby, offers=Object.create(null), missions=plans.length?await readAt(member.entity_id,'Mission'):{};
+  async function pursuePlans(member,character,decision,snapshot,time,minute,token,plans,tryConversation,schoolSite){
+   var local, nearby, schoolPeople, offers=Object.create(null), missions=plans.length?await readAt(member.entity_id,'Mission'):{};
    var used=busyTargets(member);
    var diagnosisContext, environment;
    async function home(){if(local===undefined)local=await inventory(member,character);return local;}
@@ -717,6 +732,7 @@
    // Tries one condition. Returns true when a game action was requested.
    async function attemptCondition(plan,condition,progress,label,retry,prepFor){
     var memory=M.record(decision,plan,minute), type=condition.conditionType;
+    if(schoolSite&&!isInteractionGoal(type))return false;
     var practice=type==='SkillLevel'?await ensureTraining(condition.conditionId1):null;
     var skillBaseline=null;
     if(practice){
@@ -746,11 +762,13 @@
     // (e.g. MovieScreen_WatchMovie carries Mission_Hope_HouseholdBiz_21). Use them when the condition id finds nothing.
     if(!practice&&!bags.length&&plan.name)bags=await matchGoalBags('Mission_'+plan.name);
     if(!practice&&!bags.length){
+     if(schoolSite)return false;
      M.note(decision,plan,'unsupported','실행 연결 대기 / '+type+' '+condition.conditionId1,
       '게임에서 가능한 실행 경로 확인',minute);return false;
     }
     if(!practice)M.flow(decision,plan,memory.prep&&memory.prep.grown?'retry':'need',{need:memory.flow&&memory.flow.need||condition.conditionId1},minute);
-    var place=await home();
+    var schoolTalk=schoolSite&&!plan.requiresTarget&&bags.length&&bags.every(function(b){return /^(?:Co_|Coop_|Talk)/i.test(b);});
+    var place=schoolTalk||schoolSite&&plan.requiresTarget?null:await home();
     var items=place?place.objects:[];
     var targets=plan.requiresTarget?(plan.target>0?[{entity_id:plan.target}]:[]):closest(items,character,goalPattern(practice,condition.conditionId1),20);
     // 0.4.7: objects that match the action come first, wherever they stand in the house.
@@ -758,6 +776,15 @@
     if(hint){
      var fitting=closest(items,character,hint,8);
      targets=fitting.concat(targets.filter(function(t){return fitting.indexOf(t)<0;})).slice(0,20);
+    }
+    if(schoolTalk&&String(api.game().possessed_entity_id)===String(member.entity_id)){
+     if(schoolPeople===undefined){
+      try{
+       var people=await cli('entity.scan_characters',{Radius:25,Limit:10,ref:'pawn'});
+       schoolPeople=(people.Characters||people.characters||[]).filter(function(p){return String(p.entity_id)!==String(member.entity_id);});
+      }catch(_){schoolPeople=[];}
+     }
+     targets=schoolPeople.concat(targets);
     }
     if(plan.requiresTarget&&plan.target>0){
      try{
@@ -768,7 +795,7 @@
       }
      }catch(_){}
     }
-    if(!plan.requiresTarget&&!targets.length&&String(api.game().possessed_entity_id)===String(member.entity_id)){
+    if(!schoolTalk&&!plan.requiresTarget&&!targets.length&&String(api.game().possessed_entity_id)===String(member.entity_id)){
      if(nearby===undefined){
       var searching=decision.outing&&decision.outing.goalVisit&&decision.outing.arrived;
       try{nearby=(await cli('entity.scan_objects',{Radius:searching?70:30,Limit:searching?45:22,ref:'pawn'})).objects||[];}
@@ -779,12 +806,12 @@
     var found=targets.length;
     targets=targets.filter(function(t){return !used[String(t.entity_id)];});
     var occupied=found>0&&!targets.length;
-    if(!plan.requiresTarget&&(/_Self(?:_|$)/i.test(plan.name)||bags.some(function(b){return /^Self_/i.test(b);}))){
+    if(!schoolSite&&!plan.requiresTarget&&(/_Self(?:_|$)/i.test(plan.name)||bags.some(function(b){return /^Self_/i.test(b);}))){
      targets=[{entity_id:member.entity_id}].concat(targets);
      offers[String(member.entity_id)]={interactions:bags.filter(function(b){return /^Self_/i.test(b);})
       .map(function(b){return {interaction_bag_id:b,enabled:true,display_name:bagNames[b]||b};})};
     }
-    if(!plan.requiresTarget&&place&&L.goalVenueTags(plan.name,condition.conditionId1).length)
+    if(!schoolSite&&!plan.requiresTarget&&place&&L.goalVenueTags(plan.name,condition.conditionId1).length)
      targets=targets.concat({entity_id:place.site.entity_id});
     var disabled=[], action;
     function wanted(a){return practice?practice[1].test(a.interaction_bag_id):bags.indexOf(a.interaction_bag_id)>=0;}
@@ -796,7 +823,7 @@
       });
       if(!pick)choices.forEach(function(a){if(a.enabled===false&&wanted(a)&&disabled.length<6)disabled.push({action:a,target:target});});
       return pick;
-     },token,offers);
+     },token,offers,schoolSite);
     }catch(e){
      if(e.observerBag)M.failed(decision,plan,e.observerBag,e.observerTarget,minute,'게임 행동 응답 확인 필요 / '+e.message);
      else{
@@ -814,9 +841,10 @@
       decision.goal.venue={site:decision.outing.site,condition:condition.conditionId1};
      }
      if(!practice)M.flow(decision,plan,'confirm',{},minute);
-     log(named(member)+'의 '+label+' 행동 요청: '+action.display_name+(prepFor?' (준비: '+prepFor+')':''));
+     log(named(member)+'의 '+(schoolSite?'학교 ':'')+label+' 행동 요청: '+action.display_name+(prepFor?' (준비: '+prepFor+')':''));
      return true;
     }
+    if(schoolSite)return false;
 
     var nativeTags=[], dataItem=null;
     if(!practice&&!occupied&&bags.length){
@@ -907,20 +935,20 @@
     }
     var memory=M.record(decision,plan,minute);
     // 0.6.0: a hope stuck in preparation steps aside so the others get their turn; an ambition starts its search over.
-    var stall=M.stalled(decision,plan,minute);
+    var stall=!schoolSite&&M.stalled(decision,plan,minute);
     if(stall){
      if(decision.goalRetry)delete decision.goalRetry[plan.name];
      log(named(member)+': '+label+' '+(plan.label||plan.name)+' / '+(stall==='park'?'오래 막혀 다른 소망을 먼저 진행':'오래 막혀 필요 조건을 다시 확인'));
      if(api.score)api.score({minute:minute,zoi:String(member.entity_id),kind:'blocked',reason:'stalled',name:plan.name});
     }
-    if(plan.kind!=='ambition'&&M.parked(memory,minute)){plan.status='오래 막힘 · 다른 소망을 먼저 진행';continue;}
+    if(!schoolSite&&plan.kind!=='ambition'&&M.parked(memory,minute)){plan.status='오래 막힘 · 다른 소망을 먼저 진행';continue;}
     if(memory.block&&memory.block.until>minute&&/^(?:sleeping|busy)$/.test(memory.block.kind)){
      plan.status=memory.block.label+' · '+memory.block.next;continue;
     }
     var retry=decision.goalRetry&&decision.goalRetry[plan.name];
     // A preparation step (e.g. an inferred missing skill) runs before the original condition.
     var prep=memory.prep&&memory.prep.kind==='skill'&&!memory.prep.grown&&(plan.kind==='ambition'||minute-memory.prep.since<3*1440)?memory.prep:null;
-    if(prep&&await ensureTraining(prep.skill)){
+    if(!schoolSite&&prep&&await ensureTraining(prep.skill)){
      if(await attemptCondition(plan,{conditionType:'SkillLevel',conditionId1:prep.skill},progress,label,retry,plan.name))return true;
      // No practice was possible right now: still look at the original condition, which may have opened up.
     }
@@ -928,6 +956,10 @@
      var condition=plan.conditions[j], type=condition.conditionType;
      var count=progress&&progress.conditionStates&&progress.conditionStates[j];
      if(count&&count.compareType==='GreaterOrEqual'&&count.currentCount>=count.goalCount)continue;
+     if(schoolSite){
+      if(await attemptCondition(plan,condition,progress,label,retry,null))return true;
+      continue;
+     }
      if(type==='EnterSiteCount'||type==='EnterSiteTagCount'){
       var site=await visitForGoal(member,character,condition,snapshot,time,token);
       plan.status=site?'목적지로 이동 중':'여유 시간 또는 이용 가능한 목적지 대기';
@@ -1519,7 +1551,7 @@
   }
   function reset(){siteMemory={};sites=null;householdCache={};homeCache={};houseTasks={};repairs={};}
   return {reset:reset,needs:needs,routine:routine,clean:clean,repair:repair,parcels:parcels,marketNeed:marketNeed,reviewGoal:reviewGoal,trackGoal:trackGoal,prepareGoals:prepareGoals,attend:attend,
-   pursueHope:pursueHope,prepareAmbition:prepareAmbition,pursueAmbition:pursueAmbition,
+   pursueHope:pursueHope,pursueSchoolHope:pursueSchoolHope,prepareAmbition:prepareAmbition,pursueAmbition:pursueAmbition,
    affection:affection,goalConversation:goalConversation,meetForGoal:meetForGoal,
    occupation:occupation,sideIncome:sideIncome,outing:outing,socialOuting:socialOuting,ensureTraining:ensureTraining,vacation:vacation,householdPlan:householdPlan,furnish:furnish,move:move,home:homeMember,computers:computers,siteObjects:siteObjects,objectAction:objectAction,knowsSite:knowsSite};
  }

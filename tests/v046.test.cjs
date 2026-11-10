@@ -114,21 +114,24 @@ function lifeHarness(opts = {}) {
    if (args.Component === 'Skill') return {skills:{}};
    if (args.Component === 'Hope') return {selectedHopes:[{hopeId:'PaintGoal', missionId:{value:100}}]};
    if (args.Component === 'Mission') return {missionMap:{'(Value=100)':{bIsFinished:finished,conditionStates:[{currentCount:0,goalCount:1,compareType:'GreaterOrEqual'}]}}};
+   if (opts.school) return {locatedSiteId:{value:args.entity_id==='20'&&opts.offSite?31:30}};
    return {};
   }
   if (name === 'data.table_get' && args.Alias === 'Hope') return {missionId:'M1'};
-  if (name === 'data.table_get' && args.Alias === 'Mission') return {conditions:[{conditionType:'InteractionBagCount', conditionId1:opts.bag||'PaintMasterpiece'}]};
+  if (name === 'data.table_get' && args.Alias === 'Mission') return {conditions:[{conditionType:opts.condition||'InteractionBagCount', conditionId1:opts.bag||'PaintMasterpiece'}]};
   if (name === 'interaction.search') return {results:[{interaction_bag_id:opts.bag||'PaintMasterpiece'}]};
   if (name === 'world.get_loaded_sites') return {map_id:'Cahaya_Map', sites:opts.sites||[{entity_id:30, id:'Home'}]};
   if (name === 'build.get_site_info') return {site_id:'Home', site_type:'Residence'};
   if (name === 'build.scan_objects') return {total:objects.length, objects};
   if (name === 'interaction.list_available') {
+   if(opts.school)return {interactions:[{enabled:easelEnabled,interaction_bag_id:opts.bag||'PaintMasterpiece',display_name:'동아리 물어보기'}]};
    const list = [{enabled:easelEnabled, interaction_bag_id:'PaintMasterpiece', display_name:'걸작 그리기', disabled_reason:easelEnabled?undefined:'미술 기술이 부족합니다'}];
    list.push({enabled:true, interaction_bag_id:'Art_Easel_Drawing', display_name:'그림 연습'});
    return {interactions:list};
   }
   if (name === 'schedule.diagnose') return {has_schedule:true};
-  if (name === 'interaction.get_queue') return {queue_count:0};
+  if (name === 'entity.scan_characters'&&opts.school)return {Characters:[{entity_id:20}]};
+  if (name === 'interaction.get_queue') return opts.latestQueue||{queue_count:0};
   throw Error('Unexpected CLI ' + name + ' ' + JSON.stringify(args));
  };
  const members = opts.members || [member];
@@ -139,6 +142,21 @@ function lifeHarness(opts = {}) {
   art:n=>art=n, enable:()=>easelEnabled=true, finish:()=>finished=true};
 }
 const time = {day:0, hour:10, minute:0};
+test('an enabled school conversation is requested locally and attached to the original hope',async()=>{
+ const h=lifeHarness({school:true,easelEnabled:true,bag:'Co_School_Club_01'});
+ assert.equal(await h.actions.pursueSchoolHope(h.member,h.character,h.decision,h.snapshot,time,600,1,30),true);
+ assert.equal(h.writes[0][1].target_entity_id,'20');
+ assert.equal(h.decision.goal.instance,100);
+ assert.match(h.logs[0],/학교 소망 행동 요청/);
+});
+
+test('school hopes cannot target another site, start after class has begun, or trigger a trip',async()=>{
+ for(const opts of [{offSite:true},{latestQueue:{queue_count:0,current:{interaction_bag_id:'Bag_AutoFind_Chair_Sit_ListenClass'}}},{condition:'EnterSiteCount'}]){
+  const h=lifeHarness({school:true,easelEnabled:true,bag:'Co_School_Club_01',...opts});
+  assert.equal(await h.actions.pursueSchoolHope(h.member,h.character,h.decision,h.snapshot,time,600,1,30),false);
+  assert.equal(h.writes.length,0);
+ }
+});
 test('a disabled goal action with a skill reason becomes practice, growth, then a retry of the original goal', async () => {
  const h = lifeHarness();
  // The same turn diagnoses the missing skill and queues a suitable practice.

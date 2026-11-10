@@ -1,6 +1,6 @@
 (function () {
  'use strict';
- var VERSION='0.6.8', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.6.9', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var A=ObserverAgenda, R=ObserverRecovery, Rel=ObserverRelations, M=ObserverGoalMemory;
  var ChildCare=ObserverChildCare, Score=ObserverScoreboard, CP=ObserverCareerPath, Persona=ObserverPersona, Rot=ObserverRotation, Field=ObserverFieldCheck, Family=ObserverFamily, Why=ObserverWhy;
  var claims=Family.create(), nowMinute=NaN, popupTrack=null, expectedSelected=null, lastSelected=null;
@@ -18,7 +18,7 @@
  var pausedUntil=0, firstError=0, pendingResume=true, lastMirror=0, mirrorStopped=false;
  var timerKeys=['nextAutonomy','nextHope','nextCommute','nextTalk','nextPlanning','nextNeed','nextCleaning','nextRepair',
   'nextHopeAction','nextSide','nextOuting','nextHousePlan','nextFurnish','nextPhone','nextPhoneAction',
-  'nextTaste','nextParcel','nextMarket','nextCatShop','nextAmbition','nextAmbitionAction','nextVacation','nextGoalFurnish','ambitionTurn'];
+  'nextTaste','nextParcel','nextMarket','nextCatShop','nextAmbition','nextAmbitionAction','nextVacation','nextGoalFurnish','nextSchoolHope','ambitionTurn'];
  function resetTimers(p,minute){timerKeys.forEach(function(key){p[key]=minute||0;});}
  // Why this Zoi is not being asked to do anything right now (read-only view of every running wait).
  function whyContext(m,id){
@@ -134,6 +134,7 @@
    if(tally)html+='<p class="intent">'+esc(tally)+'</p>';
    if(p.duty&&p.duty.summary&&p.duty.summary.total)
     html+='<p class="intent">'+esc(ObserverDuty.label(p.duty.summary))+(p.duty.note?' · '+esc(p.duty.note):'')+'</p>';
+   if(p.schoolHopeNote)html+='<p class="help">'+esc(p.schoolHopeNote)+'</p>';
    if(Number.isFinite(p.lastMinute))html+='<p class="help">지금: '+esc(Why.explain(p,p.lastMinute,whyContext(m,id)))+'</p>';
    if(p.goalBlock)html+='<p>막힘: '+esc(p.goalBlock)+'</p>';
    if(ChildCare.dependent(m)&&p.childCare&&p.childCare.status)html+='<p>돌봄: '+esc(p.childCare.status)+'</p>';
@@ -819,6 +820,8 @@
    if(care.reserved(m,members))return;
   }
   var urgentDutyNeed=!!L.urgentNeed(stats.stats);
+  if(p.duty&&p.duty.schoolSite!==site)p.schoolHopeNote=null;
+  if(p.duty)p.duty.schoolSite=0;
   try{if(await duty.run(m,character,p,snapshots[id],minute,token,chosen,!urgentDutyNeed)&&!urgentDutyNeed)return;}
   catch(e){
    var dutyKey='duty:'+id;
@@ -826,6 +829,13 @@
   }
   try{if(await life.needs(m,character,p,snapshots[id],minute,token))return;}
   catch(e){log(m.first_name+': 필수 욕구 처리 보류 - '+e.message);}
+  if(p.duty&&p.duty.schoolSite){
+   if(!urgentDutyNeed){
+    try{await life.pursueSchoolHope(m,character,p,snapshots[id],time,minute,token,p.duty.schoolSite);}
+    catch(e){p.schoolHopeNote='학교 소망 확인 보류 / '+e.message;}
+   }
+   return;
+  }
   if(work.is_working_time||work.is_commute_time||work.is_at_work){
    await commute(m,p,minute,token,snapshots[id]);
    return;

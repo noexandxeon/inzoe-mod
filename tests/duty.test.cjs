@@ -66,6 +66,13 @@ test('school deadlines win and only native completion counts toward half',async(
  assert.equal(archive({'20522':h.decision},h.day,h.day+1)['20522'][h.day].done,1);
 });
 
+test('arriving at school without an executable assignment leaves time for local hopes',async()=>{
+ const h=fixture([]);
+ assert.equal(await h.run(),false);
+ assert.equal(h.decision.duty.schoolSite,845);
+ assert.equal(h.writes.length,0);
+});
+
 test('the assigned paper homework is attempted away from school and counts once on its issue day',async()=>{
  const h=fixture([['Homework','EntityTag_School_PaperHomework_Complete','Homework_Do',24161,65,'AddEntityTagCount']],'homework');
  await h.run(false);
