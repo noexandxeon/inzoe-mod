@@ -56,7 +56,7 @@
    (percent(stats,'Cleanliness')===null||percent(stats,'Cleanliness')>=25);
  }
  var TRAVEL=/^(?:Go_|RabbitHole|Commute|Self_GoHome|LLM_WalkToSite|WalkToSite|Self_GoTo|Vehicle_|Ride_|Taxi_)/i;
- var QUEUE_LIMIT=4; // of the game's 7 slots; the rest stay free for the player and autonomy
+ var QUEUE_LIMIT=6; // of the game's 7 slots (0.6.16: was 4; in game the queue usually held one action and the Zoi stood idle between looks)
  function goalReady(queue,work){
   var bag=queue&&queue.current&&queue.current.interaction_bag_id||'';
   if(sleeping(queue,work))return false;
@@ -307,7 +307,9 @@
  }
  // 0.4.7: hygiene and hunger are handled before they turn urgent when the Zoi is at home and idle.
  function routineNeed(stats){
-  return [{key:'Cleanliness',limit:40},{key:'Hunger',limit:35},{key:'Toilet',limit:35}]
+  // 0.6.16: the game already gives its 'hungry' discomfort at 35% and a heavy one (15 points) soon after,
+  // so the early meal and toilet visit come sooner.
+  return [{key:'Cleanliness',limit:40},{key:'Hunger',limit:48},{key:'Toilet',limit:42}]
    .map(function(n){return {key:n.key,pct:percent(stats,n.key),limit:n.limit};})
    .filter(function(n){return n.pct!==null&&n.pct<=n.limit;})
    .sort(function(a,b){return a.pct-b.pct;})[0]||null;

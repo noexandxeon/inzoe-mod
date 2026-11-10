@@ -1,6 +1,6 @@
 (function () {
  'use strict';
- var VERSION='0.6.15', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.6.16', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var A=ObserverAgenda, R=ObserverRecovery, Rel=ObserverRelations, M=ObserverGoalMemory;
  var ChildCare=ObserverChildCare, Score=ObserverScoreboard, CP=ObserverCareerPath, Persona=ObserverPersona, Rot=ObserverRotation, Field=ObserverFieldCheck, Family=ObserverFamily, Why=ObserverWhy;
  var claims=Family.create(), nowMinute=NaN, popupTrack=null, expectedSelected=null, lastSelected=null;
@@ -983,7 +983,7 @@
     run:function(){return attempt('외출',function(){return life.outing(m,character,p,snapshots[id],time,minute,token);});}},
    {key:'gather',label:'지인 초대·파티',base:26,bonus:lonely?25:0,eligible:!p.outing&&!p.goal&&!Family.hostBusy(state.people,members,m)&&ObserverGathering.due(p,time,minute),
     run:function(){return attempt('초대',function(){return gathering.host(m,character,p,snapshots[id],time,minute,token);});}},
-   {key:'social',label:'대화·관계',base:28,bonus:needs.Society&&needs.Society.pct<25?40:lonely?20:p.bond&&p.bond.close<2?22:0,run:function(){return talk(m,character,p,minute,token,snapshots[id]);}},
+   {key:'social',label:'대화·관계',base:28,duringGoal:true,bonus:needs.Society&&needs.Society.pct<25?40:lonely?20:p.bond&&p.bond.close<2?22:0,run:function(){return talk(m,character,p,minute,token,snapshots[id]);}},
    {key:'career',label:'구직·이직',base:m.has_career?8:38,eligible:ChildCare.mayJoin(m,L),
     run:function(){return attempt('진로',function(){return career(m,p,time,minute,token,profile,work,queue);});}}
   ];
@@ -998,7 +998,9 @@
    receipt:function(){return receiptSerial;},
    moved:function(){return (state.lastMoveAt||0)>=turnStart;},
    skip:function(task){
-   return !state.enabled||token!==epoch||(!!p.goal&&!task.duringGoal);
+   // 0.6.16: once a hope action has been seen running, the next hope may be queued behind it.
+   var nextHope=task.key==='hope'&&p.goal&&p.goal.kind==='hope'&&p.goal.seen===true&&!p.goal.practice;
+   return !state.enabled||token!==epoch||(!!p.goal&&!task.duringGoal&&!nextHope);
   }});
   A.compact(p);
   daily(time,id,p);

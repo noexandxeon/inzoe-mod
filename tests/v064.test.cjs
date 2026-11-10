@@ -211,3 +211,18 @@ test('0.6.15: without close ties the Zoi returns to the people it already knows 
   assert.deepEqual(Rel.bondOrder([{entity_id: 5}, {entity_id: 2}, {entity_id: 1}, {entity_id: 9}], b.favor).map(t => t.entity_id), [1, 5, 9]);
   assert.equal(Rel.bonds([]).close, 0);
 });
+
+test('0.6.16: ambition harm goes to strangers, never to family, a romance or a started friendship', () => {
+  const Rel = require(path.join(ui, 'relations.js'));
+  const rel = (f, r, fam, b) => ({stats: {Friendship: {value: f}, Romance: {value: r}, Family: {value: fam || 0}, Business: {value: b || 0}}});
+  assert.equal(Rel.hostile({interaction_bag_id: 'Co_Villain_Push', display_name: '밀쳐 넘어뜨리기'}), true);
+  assert.equal(Rel.hostile({interaction_bag_id: 'Co_Fight_01', display_name: '몸 싸움하기'}), true);
+  assert.equal(Rel.hostile({interaction_bag_id: 'Co_Career_SmallTalk', display_name: '하루에 대해 묻기'}), false);
+  assert.equal(Rel.spared(rel(0, 0)), false, 'a stranger');
+  assert.equal(Rel.spared(rel(-13, 0)), false, 'someone already disliked');
+  assert.equal(Rel.spared(rel(5.4, 0)), true, 'a friendship that has started');
+  assert.equal(Rel.spared(rel(0, 2)), true, 'a romance');
+  assert.equal(Rel.spared(rel(0, 0, 10)), true, 'family');
+  assert.equal(L.QUEUE_LIMIT, 6);
+  assert.equal(L.routineNeed({Hunger: {pct: 46}, Toilet: {pct: 90}, Cleanliness: {pct: 90}}).key, 'Hunger');
+});

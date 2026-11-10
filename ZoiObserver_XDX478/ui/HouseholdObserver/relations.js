@@ -110,7 +110,15 @@
    .filter(function(x){return x.f>-5;})
    .sort(function(a,b){return b.f-a.f||a.i-b.i;}).map(function(x){return x.t;});
  }
- var api={bonds:bonds,bondOrder:bondOrder,OUTCOMES:OUTCOMES,remember:remember,attempted:attempted,settle:settle,blocked:blocked,ready:ready,reunion:reunion,describe:describe,plan:plan};
+ // 0.6.16: a villain ambition asks for shoving, fighting and stealing. Those go to people the Zoi does not know;
+ // family, a romance, or a friendship that has started are left alone.
+ var HOSTILE=/Fight|Push|Shove|Slap|Punch|Kick|Insult|Threat|Steal|Bully|Mock|Scold|Grab|Rumor|Negative|Mean_|Villain|Rob|Scam|밀쳐|싸움|욕하|모욕|위협|협박|훔치|괴롭|때리|조롱|험담|루머|갈취|사기/i;
+ function hostile(action){return HOSTILE.test((action&&action.interaction_bag_id||'')+' '+(action&&action.display_name||''));}
+ function spared(relationship){
+  var s=relationship&&relationship.stats||{}, v=function(k){return s[k]&&Number.isFinite(s[k].value)?s[k].value:0;};
+  return !!(relationship&&relationship.is_family)||v('Family')>0||v('Romance')>0||v('Friendship')>=3||v('Business')>=10;
+ }
+ var api={hostile:hostile,spared:spared,bonds:bonds,bondOrder:bondOrder,OUTCOMES:OUTCOMES,remember:remember,attempted:attempted,settle:settle,blocked:blocked,ready:ready,reunion:reunion,describe:describe,plan:plan};
  if(typeof module!=='undefined'&&module.exports)module.exports=api;
  else root.ObserverRelations=api;
 })(this);

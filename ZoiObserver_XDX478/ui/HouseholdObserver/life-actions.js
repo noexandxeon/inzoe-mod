@@ -119,6 +119,14 @@
    var observed=api.snapshot&&api.snapshot(id), playing=observed&&observed.queue&&observed.queue.current;
    if(playing&&L.TRAVEL.test(playing.interaction_bag_id||''))return false;
    if((api.queued?api.queued(id):[]).some(function(b){return L.TRAVEL.test(b);}))return false;
+   // 0.6.16: the game's own "move right away" instead of the walk. In game most of a free day went into walking
+   // between places, and nothing can be queued while a Zoi is on the way. Falls back to the walk if refused.
+   // The jump lands at the edge of the place (tested in game: 'Teleported to Gangnam_Business_Cafe', not yet inside),
+   // so the usual walk is still requested after it and only covers the last steps.
+   try{
+    var place=(await currentSites()).find(function(s){return Number(s.entity_id)===Number(target);});
+    if(place&&place.id)await write('movement.teleport',{entity_id:id,destination:String(place.id)},token);
+   }catch(_){}
    var descriptor=await cli('movement.get_site_move_interaction',{entity_id:id,target_entity_id:String(target)});
    if(descriptor.execution_tool!=='interaction.execute'||String(descriptor.entity_id)!==id||
       Number(descriptor.target_entity_id)!==Number(target)||descriptor.requires_zoi_group||!descriptor.interaction_bag_id)return false;
@@ -1211,7 +1219,9 @@
      if(c.conditionType==='InteractionBagCountAtFamilyRelationshipType')continue;
      var bags=await matchGoalBags(c.conditionId1);
      var chosen=available.find(function(a){return usable(a)&&bags.indexOf(a.interaction_bag_id)>=0&&
-      !/(?:Marriage|Propose|Confession)/i.test(a.interaction_bag_id);});
+      !/(?:Marriage|Propose|Confession)/i.test(a.interaction_bag_id)&&
+      // Harm asked for by an ambition goes to strangers only, never to someone the Zoi is getting close to.
+      !(Rel.hostile(a)&&Rel.spared(relationship));});
      if(chosen)return {action:chosen,plan:plan,progress:goal&&goal.progress};
     }
    }

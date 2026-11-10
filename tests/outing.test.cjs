@@ -82,9 +82,10 @@ function world(opts = {}) {
   unexpected.push(name + ' ' + JSON.stringify(args));
   throw Error('Unexpected CLI ' + name);
  };
- const actions = lifeActions({cli, write: async (...a) => writes.push(a), log: s => logs.push(s), state: {},
+ const jumps = [];
+ const actions = lifeActions({cli, write: async (...a) => { if (a[0] === 'movement.teleport') jumps.push(a); else writes.push(a); }, log: s => logs.push(s), state: {},
   game: () => ({map_id: 'Cahaya_Map', possessed_entity_id: 1}), members: () => [member], snapshot: () => snapshot, active: () => true});
- return {member, character, snapshot, writes, logs, unexpected, actions, decision: {},
+ return {member, character, snapshot, writes, jumps, logs, unexpected, actions, decision: {},
   arrive: site => { character.locatedSiteId = {value: site}; }, finish: () => { done = true; }};
 }
 const at = (hour, minute = 0) => ({day: 0, hour, minute});
@@ -98,6 +99,8 @@ test('hope with no action at home: cafe chosen by facility tags, move requested,
  assert.equal(w.writes[0][0], 'interaction.execute');
  assert.equal(w.writes[0][1].interaction_bag_id, 'LLM_WalkToSite');
  assert.equal(w.writes[0][1].target_entity_id, String(CAFE));
+ assert.equal(w.jumps.length, 1, '0.6.16: the jump is requested before the walk');
+ assert.equal(w.jumps[0][1].destination, w.jumps[0][1].destination && String(w.jumps[0][1].destination));
  assert.equal(w.decision.outing.site, CAFE);
  assert.equal(w.decision.outing.goalVisit, 'Hope_Winter_DrinkCoffee');
  // 2. Arrival is observed, then the hope action is requested on the cafe's machine.
