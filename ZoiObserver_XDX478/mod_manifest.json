@@ -1,7 +1,7 @@
 {
   "ProjectName": "ZoiObserver_XDX478",
-  "FriendlyName": "Zoi Observer 0.5.4",
-  "Description": "Household autonomy and trait-based career observer. Experimental 0.5.4.",
+  "FriendlyName": "Zoi Observer 0.5.5",
+  "Description": "Household autonomy and trait-based career observer. Experimental 0.5.5.",
   "Author": "Local custom mod",
   "Version": "20261027.16617.W.340721",
   "Url": "",
@@ -24,6 +24,7 @@
     "/ui/HouseholdObserver/agenda.js",
     "/ui/HouseholdObserver/recovery.js",
     "/ui/HouseholdObserver/relations.js",
+    "/ui/HouseholdObserver/gathering.js",
     "/ui/HouseholdObserver/life-actions.js",
     "/ui/HouseholdObserver/choices.js",
     "/ui/HouseholdObserver/panels.js",
