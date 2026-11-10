@@ -29,7 +29,8 @@
  function learned(life){return life.gatherBags||(life.gatherBags={});}
  function usable(life,bag,minute){
   var b=learned(life)[bag];
-  return !b||b.ok>0||b.fail<2||minute>=(b.retry||0);
+  // Two misses in a row rest the action, also one that worked before.
+  return !b||b.fail<2||minute>=(b.retry||0);
  }
  function due(decision,time,minute){
   var g=decision.gather||{};
@@ -38,9 +39,10 @@
  function create(api){
   var cli=api.cli, write=api.write, log=api.log, L=api.L, Rel=api.Rel;
   var searched=null;
-  async function candidates(member,minute){
+  async function candidates(member,minute,home){
    var id=String(member.entity_id), life=api.life(), book=(life.contacts||{})[id]||{};
-   var family=api.members().map(function(m){return String(m.entity_id);});
+   // Only the host's own household is family: friends living in other played households can be invited.
+   var family=api.members().filter(function(m){return m.household_id===member.household_id;}).map(function(m){return String(m.entity_id);});
    var ids=Object.keys(book).filter(function(k){
     return family.indexOf(k)<0&&Rel.ready(life,id,k,minute)&&!/^(?:worse|rejected)$/.test(book[k].outcome||'');
    }).sort(function(a,b){return (book[b].last||0)-(book[a].last||0);}).slice(0,6);
@@ -52,6 +54,8 @@
     try{
      var info=await cli('entity.reflect',{entity_id:ids[i]});
      if(info.locatedCityName&&api.game().map_id&&info.locatedCityName!==api.game().map_id)continue;
+     // Someone already visiting cannot prove that an invitation worked.
+     if(ent(info.locatedSiteId)===home)continue;
      if(L.sleeping(await cli('interaction.get_queue',{entity_id:ids[i]})))continue;
     }catch(_){continue;}
     out.push({id:ids[i],name:book[ids[i]].name||ids[i],relationship:relationship,warmth:warmth(relationship)});
@@ -75,6 +79,7 @@
   }
   async function options(member,guest,minute){
    var id=String(member.entity_id), life=api.life(), list=[];
+   function ok(a){return usable(life,a.interaction_bag_id,minute);}
    try{
     var offered=await cli('interaction.list_available',{entity_id:id,target_entity_id:guest.id});
     (offered.interactions||[]).forEach(function(a){
@@ -82,12 +87,13 @@
      if(kind)list.push({interaction_bag_id:a.interaction_bag_id,display_name:a.display_name,kind:kind,target:guest.id});
     });
    }catch(_){}
+   list=list.filter(ok);
    if(!list.length)(await catalog()).forEach(function(a){
     // Self_ actions only ran in game with the Zoi itself as the target.
     list.push(Object.assign({},a,{target:/^Self_/i.test(a.interaction_bag_id)?id:guest.id}));
    });
    var known=learned(life);
-   return list.filter(function(a){return usable(life,a.interaction_bag_id,minute);}).sort(function(a,b){
+   return list.filter(ok).sort(function(a,b){
     return ((known[b.interaction_bag_id]||{}).ok||0)-((known[a.interaction_bag_id]||{}).ok||0);
    });
   }
@@ -100,7 +106,7 @@
    var home=await api.home(member,character);
    if(!(home>0)||ent(character.locatedSiteId)!==home)return false;
    g.next=minute+120;
-   var people=await candidates(member,minute);
+   var people=await candidates(member,minute,home);
    if(!people.length){g.next=minute+360;g.status='가까운 지인 없음';return false;}
    var wantParty=people.length>=2&&minute>=(g.nextParty||0);
    for(var i=0;i<people.length;i++){

@@ -1,6 +1,6 @@
 (function () {
  'use strict';
- var VERSION='0.5.5', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.5.6', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var A=ObserverAgenda, R=ObserverRecovery, Rel=ObserverRelations, M=ObserverGoalMemory;
  var ChildCare=ObserverChildCare, Score=ObserverScoreboard;
  var busy=false, epoch=0, index=0, cache={}, profiles={}, rows={}, members=[], lastReport=0;
@@ -786,7 +786,7 @@
     run:function(){return attempt('취향',function(){return panels.preference(m,snapshots[id],skills,p,minute,token);});}},
    {key:'routine',label:'일상 욕구 관리',base:33,duringGoal:true,eligible:!!routine,
     run:function(){return attempt('일상 욕구',function(){return life.routine(m,character,p,snapshots[id],minute,token);});}},
-   {key:'vacation',label:'휴가',base:25,long:true,eligible:(!due||checkIn)&&!p.goal,run:function(){
+   {key:'vacation',label:'휴가',base:25,long:true,eligible:(!due||checkIn)&&!p.goal&&!gathering.waiting(p),run:function(){
     return attempt('휴가',function(){
      return life.vacation(m,character,p,snapshots[id],time,minute,token,calendar&&calendar.seasonLength,
       function(){return travel.start(m,p,snapshots[id],time,token);});
@@ -799,7 +799,7 @@
    {key:'parcels',label:'택배 개봉',base:30,duringGoal:true,run:function(){return attempt('택배',function(){return life.parcels(m,character,p,snapshots[id],minute,token);});}},
    {key:'furnish',label:'필요 물건 마련',base:20,long:true,bonus:p.housePlan&&p.housePlan.missing.length?35:0,
     run:function(){return attempt('가구',function(){return life.furnish(m,character,p,p.lifePlan,snapshots[id],skills,minute,token);});}},
-   {key:'event',label:'소식함 행사',base:32,long:true,eligible:!!(p.outing&&p.outing.event||news&&news.events&&news.events.length),deadline:eventEnd,
+   {key:'event',label:'소식함 행사',base:32,long:true,eligible:!!(p.outing&&p.outing.event||!gathering.waiting(p)&&news&&news.events&&news.events.length),deadline:eventEnd,
     run:function(){return attempt('행사',function(){return life.attend(m,character,p,snapshots[id],time,minute,token,news);});}},
    {key:'clean',label:'집 청소',base:30,duringGoal:true,run:function(){return attempt('청소',function(){return life.clean(m,character,p,snapshots[id],minute,token);});}},
    {key:'side',label:'생활비 보충',base:55,eligible:!!(p.lifePlan&&p.lifePlan.short),
