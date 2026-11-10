@@ -1,6 +1,6 @@
 (function () {
  'use strict';
- var VERSION='0.6.9', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.6.10', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var A=ObserverAgenda, R=ObserverRecovery, Rel=ObserverRelations, M=ObserverGoalMemory;
  var ChildCare=ObserverChildCare, Score=ObserverScoreboard, CP=ObserverCareerPath, Persona=ObserverPersona, Rot=ObserverRotation, Field=ObserverFieldCheck, Family=ObserverFamily, Why=ObserverWhy;
  var claims=Family.create(), nowMinute=NaN, popupTrack=null, expectedSelected=null, lastSelected=null;
@@ -797,6 +797,7 @@
    replies:!!p.pendingReplies}),minute);
   if(chosen&&p.wants)p.wants=null;
   if(!state.enabled||token!==epoch||!sameCity)return;
+  life.observeGoalAction(p,queue,minute);
   await keepScore(m,p,hope,stats,work,sleeping,minute);
   try{await vocation.review(m,p,minute);}catch(e){log(m.first_name+': 진로 확인 보류 / '+e.message);}
   try{await gathering.review(m,p,minute);}catch(e){log(m.first_name+': 초대 확인 보류 / '+e.message);}
@@ -979,7 +980,7 @@
      var item=(p.goalMemory||{})['hope:'+instance+':'+name];
      return !!item&&M.acted(item,minute);
     }).forEach(function(x){
-     log(m.first_name+(x.outcome==='completed'?': 소망 완료 집계 (게임 미션 확인) / ':x.outcome==='acted'?': 소망 완료 집계 (요청한 행동 뒤 종료) / ':
+     log(m.first_name+(x.outcome==='completed'?': 소망 완료 집계 (게임 미션 확인) / ':x.outcome==='acted'?': 소망 완료 추정 (실행 관찰 뒤 종료) / ':
       x.outcome==='expired'?': 소망 기한 만료 / ':': 소망이 목록에서 빠짐 · 완료 기록 없음 / ')+x.name);
     });
    }

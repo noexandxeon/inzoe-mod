@@ -344,14 +344,24 @@
    var summary=(listed.skills||[]).find(function(s){return s.id===skillId;});
    return summary&&Number.isFinite(summary.level)?{skill:skillId,level:summary.level}:null;
   }
+  function observeGoalAction(decision,queue,minute){
+   var goal=decision.goal;
+   if(!goal)return 'unseen';
+   var action=R.actionState(queue,goal);
+   if(action==='playing'){
+    goal.seen=true;
+    if(!L.TRAVEL.test(goal.bag))M.observed(decision,goal,minute);
+   }
+   return action;
+  }
   async function reviewGoal(member,decision,snapshot,minute){
    if(!decision.goal)return;
    var goal=decision.goal;
-   var action=R.actionState(snapshot.queue,goal), playing=action==='playing';
-   if(playing)goal.seen=true;
+   var action=observeGoalAction(decision,snapshot.queue,minute), playing=action==='playing';
    var data=await readAt(member.entity_id,'Mission');
    var mission=data.missionMap&&data.missionMap['(Value='+goal.instance+')'];
    var ambition=goal.kind==='ambition', label=ambition?'야망 목표':'소망';
+   if(!ambition&&!mission&&!snapshot.hope)return;
    var plans=ambition&&decision.ambition?decision.ambition.plans:decision.goalPlans;
    var plan=(plans||[]).find(function(p){return p.instance===goal.instance&&p.name===goal.name;})||goal;
    var progress=missionProgress(mission);
@@ -570,6 +580,29 @@
    if(hit){entry.hits[site]=minute;delete entry.misses[site];}
    else entry.misses[site]=minute;
   }
+  async function fishingGear(character,decision,minute){
+   var previous=decision.fishingGear, pocket=entity(character.inventoryEntityId);
+   if(previous&&minute>=previous.minute&&minute-previous.minute<30)return previous.owned;
+   if(!(pocket>0))return null;
+   try{
+    var inventory=await readAt(pocket);
+    if(!Array.isArray(inventory.ownedEntityIds))return null;
+    var ids=inventory.ownedEntityIds.map(entity), held=entity(character.usingCarriableObject), known=true;
+    if(held>0&&ids.indexOf(held)<0)ids.push(held);
+    for(var id of ids){
+     try{
+      var item=await readAt(id), definition=item.objectTableId&&await row('Object',item.objectTableId);
+      var tags=(item.entityTags||[]).concat(item.runtimeObjectTags||[],definition&&definition.objectTags||[]);
+      if(tags.some(function(tag){return /^FishingRod$/i.test(tag);})){
+       decision.fishingGear={minute:minute,owned:true};return true;
+      }
+      if(!definition)known=false;
+     }catch(_){known=false;}
+    }
+    if(!known)return null;
+    decision.fishingGear={minute:minute,owned:false};return false;
+   }catch(_){return null;}
+  }
   // Only visit a place with a goal-specific facility clue or a previously observed action.
   async function recoverGoal(member,character,decision,snapshot,time,minute,token,plan,condition,bags,nativeTags){
    var tags=nativeTags.length?[nativeTags]:L.goalVenueTags(plan.name,condition.conditionId1);
@@ -595,6 +628,8 @@
     var info=(await row('Site',site.id)).defaultInfo;
     if(!info||info.bDisabled||info.bDevOnly||!/^(?:Business|Public)$/.test(info.siteType))continue;
     var siteTags=info.tags||[];
+    if(condition.conditionId1==='Ambition_Fishing'&&!entry.hits[site.entity_id]&&
+       siteTags.some(function(tag){return /^FishingShop$/i.test(tag);}))continue;
     if(nativeTags.some(function(tag){return siteTags.indexOf(tag)<0;}))continue;
     if(siteTags.indexOf('Resort_Room')>=0||siteTags.indexOf('Cahaya_DesertIsland')>=0)continue;
     var missed=entry.misses[site.entity_id];
@@ -733,6 +768,15 @@
    async function attemptCondition(plan,condition,progress,label,retry,prepFor){
     var memory=M.record(decision,plan,minute), type=condition.conditionType;
     if(schoolSite&&!isInteractionGoal(type))return false;
+    if(condition.conditionId1==='Ambition_Fishing'){
+     var rod=await fishingGear(character,decision,minute);
+     if(rod!==true){
+      var equipment=rod===false?'소지품에 낚싯대 없음':'낚싯대 보유 확인 대기';
+      R.block(memory,rod===false?'missing':'unknown',minute,equipment);
+      M.note(decision,plan,'waiting',equipment,'낚싯대 보유 상태 재확인',minute);
+      return false;
+     }
+    }
     var practice=type==='SkillLevel'?await ensureTraining(condition.conditionId1):null;
     var skillBaseline=null;
     if(practice){
@@ -1550,7 +1594,7 @@
    return fixtures.concat(near);
   }
   function reset(){siteMemory={};sites=null;householdCache={};homeCache={};houseTasks={};repairs={};}
-  return {reset:reset,needs:needs,routine:routine,clean:clean,repair:repair,parcels:parcels,marketNeed:marketNeed,reviewGoal:reviewGoal,trackGoal:trackGoal,prepareGoals:prepareGoals,attend:attend,
+  return {reset:reset,needs:needs,routine:routine,clean:clean,repair:repair,parcels:parcels,marketNeed:marketNeed,reviewGoal:reviewGoal,observeGoalAction:observeGoalAction,trackGoal:trackGoal,prepareGoals:prepareGoals,attend:attend,
    pursueHope:pursueHope,pursueSchoolHope:pursueSchoolHope,prepareAmbition:prepareAmbition,pursueAmbition:pursueAmbition,
    affection:affection,goalConversation:goalConversation,meetForGoal:meetForGoal,
    occupation:occupation,sideIncome:sideIncome,outing:outing,socialOuting:socialOuting,ensureTraining:ensureTraining,vacation:vacation,householdPlan:householdPlan,furnish:furnish,move:move,home:homeMember,computers:computers,siteObjects:siteObjects,objectAction:objectAction,knowsSite:knowsSite};

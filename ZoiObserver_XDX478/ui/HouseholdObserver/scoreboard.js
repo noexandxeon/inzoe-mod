@@ -162,7 +162,7 @@
    // Left the list. Without the mission record nothing is concluded yet; ask again next time.
    if(!missions)return;
    var reason=Number.isFinite(w.expire)&&minute>=w.expire?'expired':'unverified';
-   // 0.6.4: the mission record disappears with a finished hope; the mod's own request is the evidence left.
+   // A finished hope can leave with its mission record. An observed action supports an inference.
    if(reason==='unverified'&&leaving===1&&acted&&acted(w.name,k)){
     if(event(state,{minute:minute,zoi:zoi,kind:'hope_completed',key:k,name:w.name,evidence:'action'}))settled.push({name:w.name,outcome:'acted'});
     delete mine[k];

@@ -70,13 +70,17 @@ test('retirement gifts and shop purchases are not leaving a job or founding a bu
 const M = require(path.join(ui, 'goal-memory.js'));
 const S = require(path.join(ui, 'scoreboard.js'));
 
-test('a hope that leaves right after its requested action counts as completed', () => {
+test('a disappearance needs observed execution, and an interrupted attempt no longer supports completion', () => {
   const d = {}, plan = {kind: 'hope', instance: 148, name: 'Trait_CleanFreak_Laundry', expire_ticks: 2000 * 600000000};
   M.record(d, plan, 1000);
   M.flow(d, plan, 'confirm', {}, 1000);
+  assert.equal(M.gone(d.goalMemory[M.key(plan)], 1050, 1).phase, 'ended', 'a request alone is not execution');
+  M.observed(d,{...plan,at:1000},1030);
   assert.equal(M.gone(d.goalMemory[M.key(plan)], 1050, 1).phase, 'completed');
   assert.equal(M.gone(d.goalMemory[M.key(plan)], 1050, 2).phase, 'ended', 'two hopes leaving together is the game clearing the list');
   assert.equal(M.gone(d.goalMemory[M.key(plan)], 2001, 1).reason, '기한 만료 후 목록에서 종료');
+  M.resume(d,plan,{bag:'Laundry',target:11},1050,'욕구 해결');
+  assert.equal(M.gone(d.goalMemory[M.key(plan)], 1060, 1).phase, 'ended');
   const idle = {kind: 'hope', instance: 9, name: 'Hope_Never_Tried'};
   M.record(d, idle, 1000);
   assert.equal(M.gone(d.goalMemory[M.key(idle)], 1050, 1).phase, 'ended', 'no request, no completion');
@@ -116,7 +120,7 @@ test('before a sleep that is not an emergency, hunger and toilet are handled fir
 
 test('two hopes leaving together stay unverified even when the goal review settles one first', () => {
   const d = {}, a = {kind: 'hope', instance: 1, name: 'Hope_A', expire_ticks: 5000 * 600000000}, b = {kind: 'hope', instance: 2, name: 'Hope_B', expire_ticks: 5000 * 600000000};
-  [a, b].forEach(p => { M.record(d, p, 1000); M.flow(d, p, 'confirm', {}, 1000); });
+  [a, b].forEach(p => { M.record(d, p, 1000); M.flow(d, p, 'confirm', {}, 1000); M.observed(d,{...p,at:1000},1020); });
   const first = d.goalMemory[M.key(a)], verdict = M.gone(first, 1050, 2);
   first.phase = verdict.phase; first.reason = verdict.reason; first.leftAt = 1050;
   M.sync(d, [], 1050);

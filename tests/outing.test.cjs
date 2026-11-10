@@ -29,9 +29,19 @@ function world(opts = {}) {
   {_row_name: 'Cahaya_Residence_1', defaultInfo: {siteType: 'Residence', tags: []}},
   {_row_name: 'Cahaya_Public_Park1', defaultInfo: {siteType: 'Public', tags: ['SiteTag_Park']}},
   {_row_name: 'Cahaya_Business_Cafe1', defaultInfo: {siteType: 'Business', tags: opts.cafeTags || ['Coffee', 'Orderable']}}];
+ if(opts.fishing){
+  character.inventoryEntityId={value:9};
+  sites[1].id=siteRows[1]._row_name='Cahaya_Public_RiverFishing';
+  sites[2].id=siteRows[2]._row_name='Cahaya_Business_TackleShop';
+  siteRows[1].defaultInfo.tags=[];
+  siteRows[2].defaultInfo.tags=['FishIngShop'];
+ }
+ const condition=opts.fishing?'Ambition_Fishing':'Coffee';
  let done = false;
  const cli = async (name, args = {}) => {
   if (name === 'entity.reflect') {
+   if(opts.fishing&&args.entity_id==='9')return {ownedEntityIds:opts.rod?[{value:8}]:[]};
+   if(opts.fishing&&args.entity_id==='8')return {objectTableId:'Rod',entityTags:[]};
    if (args.Component === 'Hope') return {selectedHopes: [{hopeId: 'Hope_Winter_DrinkCoffee', missionId: {value: 100}}]};
    if (args.Component === 'Mission') return {missionMap: {'(Value=100)': {bIsFinished: done,
     conditionStates: [{currentCount: done ? 1 : 0, goalCount: 1, compareType: 'GreaterOrEqual'}]}}};
@@ -39,10 +49,12 @@ function world(opts = {}) {
    return {};
   }
   if (name === 'data.table_get' && args.Alias === 'Hope') return {missionId: 'M1'};
-  if (name === 'data.table_get' && args.Alias === 'Mission') return {conditions: [{conditionType: 'InteractionBagCount', conditionId1: 'Coffee'}]};
+  if (name === 'data.table_get' && args.Alias === 'Mission') return {conditions: [{conditionType: 'InteractionBagCount', conditionId1: condition}]};
+  if (name === 'data.table_get' && args.Alias === 'Object' && args.Row === 'Rod') return {objectTags:['FishingRod']};
   if (name === 'data.table_get_all' && args.Alias === 'Site') return siteRows;
   if (name === 'data.table_get') throw Error('Row not found');
-  if (name === 'interaction.search') return {results: args.Keyword === 'Coffee' ? [{interaction_bag_id: 'CoffeeMachine_Order', display_name: '커피 주문하기', tags: ['Coffee']}] : []};
+  if (name === 'interaction.search') return {results: args.Keyword === condition ?
+   [{interaction_bag_id:opts.fishing?'Click_Fishing':'CoffeeMachine_Order',tags:[condition]}] : []};
   if (name === 'world.get_loaded_sites') return {map_id: 'Cahaya_Map', sites};
   if (name === 'build.get_site_info') return character.locatedSiteId.value === HOME ? {site_id: 'Cahaya_Residence_1', site_type: 'Residence'} : {site_id: 'Cahaya_Business_Cafe1', site_type: 'Business'};
   if (name === 'build.scan_objects') {
@@ -108,4 +120,14 @@ test('no facility carries the tags: no trip is requested and the goal stays wait
  assert.equal(w.writes.length, 0);
  assert.equal(w.decision.outing, undefined);
  assert.deepEqual(w.unexpected, []);
+});
+
+test('fishing checks the inventory first and sends an equipped Zoi to water instead of the tackle shop',async()=>{
+ const empty=world({fishing:true});
+ assert.equal(await empty.actions.pursueHope(empty.member,empty.character,empty.decision,empty.snapshot,at(10),600,1),false);
+ assert.equal(empty.decision.goalPlans[0].status,'소지품에 낚싯대 없음');
+ assert.equal(empty.writes.length,0);
+ const equipped=world({fishing:true,rod:true});
+ assert.equal(await equipped.actions.pursueHope(equipped.member,equipped.character,equipped.decision,equipped.snapshot,at(10),600,1),true);
+ assert.equal(equipped.writes[0][1].target_entity_id,String(PARK));
 });

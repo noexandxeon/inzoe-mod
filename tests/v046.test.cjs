@@ -150,6 +150,17 @@ test('an enabled school conversation is requested locally and attached to the or
  assert.match(h.logs[0],/학교 소망 행동 요청/);
 });
 
+test('only the requested action and target support an inferred hope completion',async()=>{
+ const h=lifeHarness({easelEnabled:true});
+ assert.equal(await h.actions.pursueHope(h.member,h.character,h.decision,h.snapshot,time,600,1),true);
+ const goal=h.decision.goal, item=h.decision.goalPlans[0].memory;
+ h.actions.observeGoalAction(h.decision,{entries:[{bag:goal.bag,target:'20'}]},615);
+ h.actions.observeGoalAction(h.decision,{current:{interaction_bag_id:goal.bag,target_entity_id:21,state:'Playing'}},620);
+ assert.equal(M.acted(item,620),false);
+ h.actions.observeGoalAction(h.decision,{current:{interaction_bag_id:goal.bag,target_entity_id:20,state:'Playing'}},625);
+ assert.equal(M.acted(item,630),true);
+});
+
 test('school hopes cannot target another site, start after class has begun, or trigger a trip',async()=>{
  for(const opts of [{offSite:true},{latestQueue:{queue_count:0,current:{interaction_bag_id:'Bag_AutoFind_Chair_Sit_ListenClass'}}},{condition:'EnterSiteCount'}]){
   const h=lifeHarness({school:true,easelEnabled:true,bag:'Co_School_Club_01',...opts});
