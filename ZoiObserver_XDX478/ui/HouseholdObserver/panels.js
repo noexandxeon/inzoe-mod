@@ -301,6 +301,11 @@
       payment.matchingBalanceChange=Number.isFinite(payment.balanceAfter)&&payment.balanceBefore-payment.balanceAfter===payment.amount;
       payment.ledgerEntry=L.matchingDebit(wallet,payment.checkpoint,member.entity_id,payment.amount,payment.ledgerReason);
       if(payment.ledgerEntry)log(member.first_name+': 납부 거래 원장 일치 / '+payment.amount+'미유');
+      else if(!payment.duplicateNoted&&L.debitCount(wallet,payment.checkpoint,member.entity_id,payment.amount,payment.ledgerReason)>=2){
+       payment.duplicateNoted=true;
+       log(member.first_name+': 같은 납부가 두 번 이상 기록됨 / '+payment.amount+'미유');
+       if(api.house)api.house('duplicate');
+      }
      }
      payment.responseConfirmed=item.phase!=='requested';
      payment.phase=payment.ledgerEntry?'ledger-matched':payment.responseConfirmed?'response-confirmed':'unconfirmed';

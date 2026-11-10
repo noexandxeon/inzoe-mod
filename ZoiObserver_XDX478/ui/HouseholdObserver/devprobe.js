@@ -21,7 +21,7 @@
  }
  // Live update: stop the running observer, then load the changed script files again in this page.
  // The page is not navigated, so the game bridge (inzoi.cli) stays attached and wf.state is kept.
- var ORDER = ['policy.js','protocol.js','life.js','child-care.js','game-data.js','goal-memory.js','scoreboard.js','agenda.js','recovery.js','career-path.js','persona.js','rotation.js','fieldcheck.js','relations.js','gathering.js',
+ var ORDER = ['policy.js','protocol.js','life.js','child-care.js','game-data.js','goal-memory.js','scoreboard.js','agenda.js','recovery.js','career-path.js','persona.js','family.js','rotation.js','fieldcheck.js','relations.js','gathering.js',
   'choices.js','life-actions.js','panels.js','travel.js','app.js'];
  function inject(src) {
   return new Promise(function (resolve, reject) {

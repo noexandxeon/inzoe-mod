@@ -123,7 +123,63 @@
   flow(decision,plan,'retry',{},minute);
   return item;
  }
- var api={gone:gone,key:key,record:record,note:note,sync:sync,allowed:allowed,failed:failed,
+ // 0.6.0 (1) Picking a goal back up. An action that was cut short by work, a pressing need or a trip did
+ // not fail: nothing is learned about the action, so it gets no penalty and is asked again when the Zoi is free.
+ var NEED_BAG=/^(?:Eat_|Sleep_|Sleeping_|Nap_|Self_Sleep_|Self_Nap_|Shower\d|Use_Bath|(?:Object_)?Toilet\d)/i;
+ function interruption(ctx){
+  var w=ctx.work||{};
+  if(w.is_at_work||w.is_working_time||w.is_commute_time)return '출근·근무';
+  var bag=ctx.current&&ctx.current.interaction_bag_id||'';
+  if(ctx.travel&&ctx.travel.test(bag))return '이동';
+  if(NEED_BAG.test(bag)||ctx.urgent)return '욕구 해결';
+  return null;
+ }
+ // At most three pick-ups per action and game day; after that it is treated as an ordinary miss.
+ function resume(decision,plan,goal,minute,why){
+  var item=record(decision,plan,minute), day=Math.floor(minute/1440), r=item.resume;
+  var same=r&&r.day===day&&r.bag===goal.bag&&String(r.target)===String(goal.target);
+  if(same&&r.count>=3)return false;
+  item.resume={day:day,bag:goal.bag,target:goal.target,why:why,at:minute,count:same?r.count+1:1};
+  note(decision,plan,'waiting','중단됨('+why+') · 끝나면 이어서','같은 행동 재요청',minute);
+  return true;
+ }
+ // 0.6.0 (2) The chain from goal to what it needs, as steps with their state, for the window and the report.
+ function chain(item){
+  if(!item)return [];
+  var f=item.flow||{}, order=STEPS.indexOf(f.step||'need'), steps=[];
+  function add(label,at){steps.push({label:label,state:order>at?'done':order===at?'now':'todo'});}
+  add(f.need?'필요: '+f.need:'필요 조건 확인',0);
+  if(f.prep||item.prep)add('준비: '+(f.prep||item.prep&&item.prep.skill+' 연습'),1);
+  add('원래 목표 재시도',2);add('완료 확인',3);
+  if(item.park&&item.park.until>item.lastSeen)steps.push({label:'다른 목표 먼저',state:'now'});
+  return steps;
+ }
+ // A goal that has sat in "need/prepare" too long without evidence. A hope steps aside for a while so the
+ // other hopes get their turn (it may expire; the day's count matters more). An ambition never steps aside:
+ // its dead ends are forgotten and the requirement is worked out again.
+ function stalled(decision,plan,minute){
+  var item=record(decision,plan,minute), f=item.flow;
+  if(!f||!/^(?:need|prepare)$/.test(f.step)||!Number.isFinite(f.since)||f.since>minute)return null;
+  var ambition=plan.kind==='ambition';
+  var limit=ambition?2*1440:Number.isFinite(item.expire)?Math.max(120,Math.min(360,(item.expire-f.since)/3)):360;
+  if(minute-f.since<limit)return null;
+  item.failures={};item.block=null;
+  f.since=minute;
+  if(ambition){
+   item.prep=null;f.step='need';f.need=null;f.prep=null;
+   item.reroutes=(item.reroutes||0)+1;
+   note(decision,plan,'waiting','오래 막혀 필요 조건을 처음부터 다시 확인','다른 행동·장소·대상 탐색',minute);
+   return 'reroute';
+  }
+  item.park={until:minute+240,count:(item.park&&item.park.count||0)+1};
+  note(decision,plan,'waiting','오래 막힘 · 다른 소망을 먼저 진행','4게임시간 뒤 다시 시도',minute);
+  return 'park';
+ }
+ function parked(item,minute){
+  if(item&&item.park&&item.park.until-minute>240)item.park=null;
+  return !!(item&&item.park&&item.park.until>minute);
+ }
+ var api={interruption:interruption,resume:resume,chain:chain,stalled:stalled,parked:parked,gone:gone,key:key,record:record,note:note,sync:sync,allowed:allowed,failed:failed,
   practiceAllowed:practiceAllowed,practiceLimit:practiceLimit,practiceMissed:practiceMissed,practiceRan:practiceRan,started:started,flow:flow,flowText:flowText,prepare:prepare,prepared:prepared,STEP_LABELS:STEP_LABELS};
  if(typeof module!=='undefined'&&module.exports)module.exports=api;
  else root.ObserverGoalMemory=api;

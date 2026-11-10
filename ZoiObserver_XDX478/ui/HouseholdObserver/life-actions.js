@@ -74,6 +74,8 @@
    var id=String(member.entity_id);
    for(var i=0;i<objects.length;i++){
     var target=String(objects[i].entity_id), available, self=target===id;
+    // 0.6.0: another family member was just sent to this object — take a different one.
+    if(!self&&api.claims&&!api.claims.free(target,id))continue;
     try{
      available=offers&&offers[target];
      // 0.4.7: interaction.list_available rejects the actor itself ("not a supported target type"),
@@ -97,6 +99,7 @@
     run.target_entity_id=target;
     try{await write('interaction.execute',run,token);}
     catch(e){e.observerBag=action.interaction_bag_id;e.observerTarget=target;throw e;}
+    if(!self&&api.claims)api.claims.claim(target,id);
     return Object.assign({},action,{observer_target:target});
    }
    return null;
@@ -389,6 +392,17 @@
    }else{
     var reason=goal.practice&&goal.seen?'연습 종료 · 기술 성장 미확인':
      goal.seen?'행동 후 조건 진행 없음':'행동 대기열 등록 또는 시작 미확인';
+    // 0.6.0: cut short by work, a pressing need or a trip — not a failure. Ask again when free.
+    var cut=M.interruption({work:snapshot.work,current:snapshot.queue.current,travel:L.TRAVEL,
+     urgent:!!(snapshot.stats&&L.urgentNeed(snapshot.stats.stats))});
+    if(cut&&M.resume(decision,plan,goal,minute,cut)){
+     if(goal.practice&&!goal.seen)M.practiceMissed(decision,plan,minute);
+     decision.nextHopeAction=minute;
+     if(ambition)decision.nextAmbitionAction=minute;
+     log(named(member)+': '+goal.name+' / 중단됨('+cut+') · 끝나면 이어서 합니다');
+     decision.goal=null;
+     return;
+    }
     // Practice that never started does not use up today's practice share.
     if(goal.practice)goal.seen?M.practiceRan(decision,plan,minute):M.practiceMissed(decision,plan,minute);
     // A short practice can earn XP without a level-up. Do not call it a failed action.
@@ -864,6 +878,14 @@
      plan.status='게임에서 미션 활성화 대기';continue;
     }
     var memory=M.record(decision,plan,minute);
+    // 0.6.0: a hope stuck in preparation steps aside so the others get their turn; an ambition starts its search over.
+    var stall=M.stalled(decision,plan,minute);
+    if(stall){
+     if(decision.goalRetry)delete decision.goalRetry[plan.name];
+     log(named(member)+': '+label+' '+(plan.label||plan.name)+' / '+(stall==='park'?'오래 막혀 다른 소망을 먼저 진행':'오래 막혀 필요 조건을 다시 확인'));
+     if(api.score)api.score({minute:minute,zoi:String(member.entity_id),kind:'blocked',reason:'stalled',name:plan.name});
+    }
+    if(plan.kind!=='ambition'&&M.parked(memory,minute)){plan.status='오래 막힘 · 다른 소망을 먼저 진행';continue;}
     if(memory.block&&memory.block.until>minute&&/^(?:sleeping|busy)$/.test(memory.block.kind)){
      plan.status=memory.block.label+' · '+memory.block.next;continue;
     }

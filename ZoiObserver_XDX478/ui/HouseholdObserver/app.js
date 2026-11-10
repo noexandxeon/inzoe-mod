@@ -1,8 +1,9 @@
 (function () {
  'use strict';
- var VERSION='0.5.9', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.6.0', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var A=ObserverAgenda, R=ObserverRecovery, Rel=ObserverRelations, M=ObserverGoalMemory;
- var ChildCare=ObserverChildCare, Score=ObserverScoreboard, CP=ObserverCareerPath, Persona=ObserverPersona, Rot=ObserverRotation, Field=ObserverFieldCheck;
+ var ChildCare=ObserverChildCare, Score=ObserverScoreboard, CP=ObserverCareerPath, Persona=ObserverPersona, Rot=ObserverRotation, Field=ObserverFieldCheck, Family=ObserverFamily;
+ var claims=Family.create(), nowMinute=NaN, popupTrack=null, expectedSelected=null, lastSelected=null;
  var busy=false, epoch=0, index=0, cache={}, profiles={}, rows={}, members=[], lastReport=0;
  // Kept on window so a live update keeps the log history.
  var logs=window.ZoiObserverLogs||(window.ZoiObserverLogs=[]);
@@ -38,7 +39,8 @@
  }
  init();
  var gameData=ObserverGameData.create(cli);
- var life=ObserverLifeActions.create({cli:cli,write:write,log:log,state:state,gameData:gameData,
+ var life=ObserverLifeActions.create({cli:cli,write:write,log:log,state:state,gameData:gameData,claims:claims,
+  score:function(e){Score.event(state,e);},
   markAccepted:function(){receiptSerial++;},
   game:function(){return lastGame;},members:function(){return members;},snapshot:function(id){return snapshots[id];},
   queued:function(id){var s=snapshots[String(id)];return s&&s.queue&&s.queue.items||[];},
@@ -61,9 +63,11 @@
   move:function(member,site,token){return life.move(member,site,token);},
   score:function(e){Score.event(state,e);}});
  var panels=ObserverPanels.create({cli:cli,write:write,log:log,state:state,game:function(){return lastGame;},
+  house:function(kind){Score.house(state,nowMinute,kind);},
   background:function(){return state.background;},
   active:function(token){return state.enabled&&token===epoch;}});
  var travel=ObserverTravel.create({cli:cli,write:write,log:log,state:state,game:function(){return lastGame;},
+  house:function(kind){Score.house(state,nowMinute,kind);},
   active:function(token){return state.enabled&&token===epoch;}},L,P);
  var care=ChildCare.create({cli:cli,write:write,log:log,move:life.move,state:state,game:function(){return lastGame;},
   queued:async function(id){return (await readQueue(String(id))).entries;},
@@ -74,7 +78,7 @@
   '<p class="help" id="data-status"></p><p class="help">창 복구 Ctrl+Shift+O</p>'+
   '<p class="help"><button id="background" aria-pressed="true"></button><span id="mode-note"></span></p>'+
   '<p class="help"><button id="rotate" aria-pressed="true"></button><span id="rotate-note"></span></p>'+
-  '<div id="people"></div><p id="news"></p><p class="limit">욕구·수리·택배·소망 / 소식·일정 / 취향·관계</p>'+
+  '<p class="help" id="unattended"></p><div id="people"></div><p id="news"></p><p class="limit">욕구·수리·택배·소망 / 소식·일정 / 취향·관계</p>'+
   '<div id="log"></div>';
  function log(message){
   var d=new Date(), pad=function(n){return ('0'+n).slice(-2);};
@@ -167,6 +171,8 @@
    return html+'</div>';
   }).join('');
   var news=panels.latestNews();
+  var houseLine=Number.isFinite(nowMinute)?Score.houseLine(state,Score.dayOf(nowMinute)):'';
+  document.getElementById('unattended').textContent=houseLine;
   document.getElementById('news').textContent=news?'소식함 '+news.entries.length+'건 확인'+
    (news.events.length?' · 현재 행사 '+news.events.map(function(e){return e.title;}).join(', '):''):'';
   var el=document.getElementById('log');el.textContent=logs.slice(-35).join('\n');el.scrollTop=el.scrollHeight;
@@ -367,7 +373,14 @@
  }
  async function answerPopup(token,game){
   var blocking=game.blocking||{};
-  if(!blocking.popup_count){blockedPopup=null;lastPopup=null;return;}
+  if(!blocking.popup_count){
+   // 0.6.0: how the popup ended and how long it blocked the game (the mod's own click, or a person's).
+   if(popupTrack){
+    if(state.enabled)Score.house(state,nowMinute,'popup',{auto:popupTrack.auto,seconds:(Date.now()-popupTrack.since)/1000});
+    popupTrack=null;
+   }
+   blockedPopup=null;lastPopup=null;return;
+  }
   if(ObserverTravel.travelOverlay(blocking)){blockedPopup=null;return;}
   if(checkingPopup)return;
   checkingPopup=true;
@@ -384,6 +397,7 @@
    var member=members.find(function(m){return String(m.entity_id)===actor;});
    if(!member||id==='RabbitHole_Go'&&ChildCare.dependent(member))return;
    var key=String(id)+':'+popup.desc;
+   if(!popupTrack||popupTrack.key!==key)popupTrack={key:key,since:Date.now(),auto:false};
    if(lastPopup!==key){lastPopup=key;popupTries=0;nextPopupTry=0;}
    if(popupTries>=2||Date.now()<nextPopupTry)return;
    popupTries++;
@@ -420,6 +434,7 @@
    if(blockedPopup.some(function(p){return p.popup_id===id&&p.desc===popup.desc;})){
     log('팝업 응답 결과 미확인: '+id);
    }else{
+    if(popupTrack)popupTrack.auto=true;
     log('팝업 자동 응답 확인: '+id+' / '+button.text+(picked?' · '+picked.why:''));
     if(scheduleConfirm)scheduleCancel=null;
     lastPopup=null;
@@ -671,7 +686,7 @@
    await write('character.possess',{character_id:pick},token,null,String(game.possessed_entity_id));
    var now=await cli('game.get_state');
    if(String(now.possessed_entity_id)!==pick)throw Error('게임에 반영되지 않음');
-   lastGame=now;Rot.moved(state,minute);
+   lastGame=now;expectedSelected=pick;Rot.moved(state,minute);
    log('가족 순환 선택: '+who.first_name+' ('+why+')');
    return true;
   }catch(e){
@@ -809,6 +824,12 @@
   var routine=L.routineNeed(needs);
   var urgent=['Toilet','Hunger','Sleep','Cleanliness'].some(function(k){return C.catDonut(k,needs[k]);});
   var step=p.careerPath&&p.careerPath.step;
+  // Hopes completed today by each adult of this household: whoever is behind gets the next turn.
+  var doneToday={};
+  members.filter(function(x){return x.household_id===m.household_id&&!ChildCare.dependent(x);}).forEach(function(x){
+   var tally=Score.summary(state,Score.dayOf(minute),x.entity_id);
+   doneToday[String(x.entity_id)]=tally?tally.completed:0;
+  });
   var tasks=[
    {key:'outingProgress',label:'외출 진행·귀가',base:95,duringGoal:true,eligible:!!p.outing,
     run:function(){return life.outing(m,character,p,snapshots[id],time,minute,token);}},
@@ -835,7 +856,7 @@
       function(){return travel.start(m,p,snapshots[id],time,token);});
     });
    }},
-   {key:'hope',label:'소망 추구',base:50,eligible:plans.length>0,deadline:dueAt,why:due?'만료가 가까운 소망':null,
+   {key:'hope',label:'소망 추구',base:50,bonus:Family.fairness(doneToday,id,Score.TARGET),eligible:plans.length>0,deadline:dueAt,why:due?'만료가 가까운 소망':null,
     run:function(){return attempt('소망',function(){return life.pursueHope(m,character,p,snapshots[id],time,minute,token,handleTalk);});}},
    {key:'ambition',label:'야망 단계',base:42,eligible:!!(p.ambition&&p.ambition.plans.length),
     run:function(){return attempt('야망',function(){return life.pursueAmbition(m,character,p,snapshots[id],time,minute,token,handleTalk);});}},
@@ -856,7 +877,7 @@
     run:function(){return attempt('부수입',function(){return life.sideIncome(m,character,p,p.lifePlan,snapshots[id],skills,minute,token);});}},
    {key:'outing',label:'여가 외출',base:15,long:true,eligible:!p.outing&&!gathering.waiting(p),
     run:function(){return attempt('외출',function(){return life.outing(m,character,p,snapshots[id],time,minute,token);});}},
-   {key:'gather',label:'지인 초대·파티',base:26,bonus:lonely?25:0,eligible:!p.outing&&!p.goal&&ObserverGathering.due(p,time,minute),
+   {key:'gather',label:'지인 초대·파티',base:26,bonus:lonely?25:0,eligible:!p.outing&&!p.goal&&!Family.hostBusy(state.people,members,m)&&ObserverGathering.due(p,time,minute),
     run:function(){return attempt('초대',function(){return gathering.host(m,character,p,snapshots[id],time,minute,token);});}},
    {key:'social',label:'대화·관계',base:28,bonus:needs.Society&&needs.Society.pct<25?40:lonely?20:0,run:function(){return talk(m,character,p,minute,token,snapshots[id]);}},
    {key:'career',label:'구직·이직',base:m.has_career?8:38,eligible:ChildCare.mayJoin(m,L),
@@ -1006,6 +1027,7 @@
    if(lastGame.phase!=='in_game'||lastGame.loading){status='게임 로딩/생활 진입 대기';errors=0;firstError=0;return;}
    await gameData.catalog();
    var time=await cli('environment.get_time');
+   nowMinute=gameMinute(time);
    if(state.enabled&&state.travel){
     try{
      if(await travel.advance(lastGame,time,token)){
@@ -1060,7 +1082,7 @@
      }
     }catch(_){}
    }
-   try{if(await panels.restorePhoneActor(token))lastGame=await cli('game.get_state');}
+   try{if(await panels.restorePhoneActor(token)){lastGame=await cli('game.get_state');expectedSelected=String(lastGame.possessed_entity_id);}}
    catch(e){if(cache.phoneReturn!==e.message){cache.phoneReturn=e.message;log('휴대폰 처리 후 원래 조이 복귀 대기');}}
    try{await scheduleChoice(time,token);}
    catch(e){if(cache.schedule!==e.message){cache.schedule=e.message;log('일정 판단 보류 - '+e.message);}}
@@ -1084,6 +1106,11 @@
     try{await inspect(member,time,token);}
     catch(e){log(member.first_name+': 관찰 보류 - '+e.message);}
    }
+   // 0.6.0: a selection change the mod did not make is a person stepping in.
+   var selectedNow=String(lastGame.possessed_entity_id);
+   if(state.enabled&&lastSelected&&selectedNow!==lastSelected&&selectedNow!==expectedSelected&&!panels.borrowing()&&
+      members.some(function(x){return String(x.entity_id)===selectedNow;}))Score.house(state,nowMinute,'selection');
+   lastSelected=selectedNow;expectedSelected=null;
    errors=0;firstError=0;lastCycle=Date.now();
    if(Date.now()-lastReport>60000)await report();
    await saveMirror();
@@ -1157,7 +1184,7 @@
  };
  document.getElementById('stop').onclick=function(){
   mirrorStopped=true;pendingResume=false;
-  if(state.enabled){state.enabled=false;epoch++;log('자동 명령 중지.');}
+  if(state.enabled){Score.house(state,nowMinute,'stop');state.enabled=false;epoch++;log('자동 명령 중지.');}
   saveMirror(true);
  };
  document.getElementById('report').onclick=function(){report(true).then(function(){log('수동 진단 저장 완료: saved/observer-report.cfg');}).catch(function(e){log('진단 저장 실패: '+e.message);});};
@@ -1166,7 +1193,7 @@
   members=[];playedGroups=[];rosterMap='';
   lastPendingPoll=0;queueSampleAt={};
   lastPopup=null;blockedPopup=null;popupTries=0;nextPopupTry=0;scheduleCancel=null;
-  life.reset();panels.reset();care.reset();gathering.reset();vocation.reset();
+  life.reset();panels.reset();care.reset();gathering.reset();vocation.reset();claims.reset();popupTrack=null;lastSelected=null;expectedSelected=null;
   pendingResume=true;pausedUntil=0;errors=0;firstError=0;
   log('저장된 관찰 설정을 불러왔습니다. 목표와 현재 게임 상태를 다시 확인합니다.');
  };
