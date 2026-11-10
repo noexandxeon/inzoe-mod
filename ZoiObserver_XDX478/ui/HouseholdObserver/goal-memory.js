@@ -58,16 +58,32 @@
   var keys=Object.keys(item.failures).sort(function(a,b){return item.failures[b].until-item.failures[a].until;});
   keys.slice(24).forEach(function(k){delete item.failures[k];});
  }
+ // Practice budget per goal and game day. It counts practice that actually ran: a request that never
+ // started gives its slot back (practiceMissed). An ambition is a long-term goal the Zoi keeps working
+ // on every day, so it gets a larger share than a hope that may expire.
+ function practiceLimit(plan){return plan&&plan.kind==='ambition'?5:3;}
  function practiceAllowed(decision,plan,minute){
   var item=record(decision,plan,minute), day=Math.floor(minute/1440);
   if(!item.practice||item.practice.day!==day)item.practice={day:day,sessions:0};
-  return item.practice.sessions<3;
+  return item.practice.sessions<practiceLimit(plan);
+ }
+ function practiceMissed(decision,plan,minute){
+  var item=record(decision,plan,minute), p=item.practice;
+  if(!p||!p.open)return false;
+  p.open=false;
+  if(p.day===Math.floor(minute/1440)&&p.sessions>0)p.sessions--;
+  p.missed=(p.missed||0)+1;
+  return true;
+ }
+ function practiceRan(decision,plan,minute){
+  var item=record(decision,plan,minute);
+  if(item.practice)item.practice.open=false;
  }
  function started(decision,plan,minute,skill){
   var item=note(decision,plan,skill?'preparing':'running',
    skill?'선행 기술 연습 요청 · 성장 확인 대기':'행동 요청 · 실제 진행 확인 대기',
    skill?'기술 성장 확인 후 원래 목표 재평가':'게임 미션 진행 확인',minute);
-  if(skill){practiceAllowed(decision,plan,minute);item.practice.sessions++;}
+  if(skill){practiceAllowed(decision,plan,minute);item.practice.sessions++;item.practice.open=true;}
   item.lastAction=minute;
  }
  // Goal flow: 목표 → 필요(기술·물건·상대) → 준비(연습·구매·외출) → 원래 목표 재시도 → 완료 확인.
@@ -108,7 +124,7 @@
   return item;
  }
  var api={gone:gone,key:key,record:record,note:note,sync:sync,allowed:allowed,failed:failed,
-  practiceAllowed:practiceAllowed,started:started,flow:flow,flowText:flowText,prepare:prepare,prepared:prepared,STEP_LABELS:STEP_LABELS};
+  practiceAllowed:practiceAllowed,practiceLimit:practiceLimit,practiceMissed:practiceMissed,practiceRan:practiceRan,started:started,flow:flow,flowText:flowText,prepare:prepare,prepared:prepared,STEP_LABELS:STEP_LABELS};
  if(typeof module!=='undefined'&&module.exports)module.exports=api;
  else root.ObserverGoalMemory=api;
 })(this);

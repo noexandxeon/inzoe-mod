@@ -17,8 +17,10 @@ function fixture(age,values,offers){
  const childSample={character:place,queue:childQueue,stats:{stats:Object.fromEntries(
   Object.entries(values).map(([key,pct])=>[key,{pct}])
  )}};
+ let queuedOf=null;
  const care=ChildCare.create({
   state,game:()=>({map_id:city}),active:()=>true,log(){},
+  async queued(id){return queuedOf?queuedOf(id):null;},
   async cli(name,args){
    if(name==='entity.get_simulate_state')return {results:args.entity_ids.split(',').map(entity_id=>({entity_id,exists:true,simulated:true}))};
    if(name==='household.get_members')return {household_id:10,members:[child,adult]};
@@ -38,6 +40,7 @@ function fixture(age,values,offers){
   async move(member,site){moves.push([member.entity_id,site]);return true;}
  },Life);
  return {care,state,writes,moves,work,adultPlace,adultQueue,childSample,childQueue,
+  queued:fn=>{queuedOf=fn;},
   run:minute=>care.run(child,group,minute,1,childSample),
   reserved:()=>care.reserved(adult,group)};
 }
@@ -92,4 +95,25 @@ test('toddler sleep uses the native age-specific nap and recognises the resultin
  await h.run(112);
  assert.equal(h.writes.length,1);
  assert.equal(h.state.people['1'].childCare.lastResult.asleep,true);
+});
+
+test('care still queued behind the caregiver\'s own action keeps its reservation; no second request is made',async t=>{
+ let now=100000, queued=[{bag:'Co_Infant_GiveMilk_Talk',target:'1'}];
+ t.mock.method(Date,'now',()=>now);
+ const h=fixture('Infant',{Hunger:35,Sleep:70},[{interaction_bag_id:'Co_Infant_GiveMilk_Talk',enabled:true}]);
+ await h.run(200);
+ const first=h.writes.length;
+ assert.ok(first>=1);
+ // The caregiver keeps painting; the milk request waits in the queue and hunger has not moved.
+ h.adultQueue.queue_count=1;h.adultQueue.current={interaction_bag_id:'Art_Easel_Drawing',target_entity_id:99};
+ h.queued(()=>queued);
+ now+=30000;
+ await h.run(230);
+ assert.equal(h.writes.length,first,'no repeated care request while the first is queued');
+ assert.equal(h.reserved(),true);
+ // Once it is no longer queued and nothing changed, the result is unknown and care is looked at again.
+ queued=[];
+ now+=30000;
+ await h.run(240);
+ assert.equal(h.reserved(),false);
 });

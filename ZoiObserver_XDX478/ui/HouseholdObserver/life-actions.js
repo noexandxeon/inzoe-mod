@@ -295,6 +295,7 @@
    M.started(decision,plan,minute,practice&&practice.skill);
    decision.goal={name:plan.name,kind:plan.kind,instance:plan.instance,bag:bag,target:target,at:minute,
     sentAt:Date.now(),progress:missionProgress(progress),practice:practice||null};
+   if(api.requested)api.requested(decision,plan,minute);
   }
   async function skillEvidence(member,skillId){
    var component;
@@ -373,6 +374,7 @@
     M.note(decision,plan,'running',waiting,'실제 행동 시작 확인',minute);
     return;
    }else if(L.sleeping(snapshot.queue,snapshot.work)){
+    if(goal.practice&&!goal.seen)M.practiceMissed(decision,plan,minute);
     M.note(decision,plan,'waiting','수면 중 · 목표 진행 미확인','기상 후 다시 시도',minute);
     decision.nextHopeAction=minute;
     if(ambition)decision.nextAmbitionAction=minute;
@@ -380,6 +382,8 @@
    }else{
     var reason=goal.practice&&goal.seen?'연습 종료 · 기술 성장 미확인':
      goal.seen?'행동 후 조건 진행 없음':'행동 대기열 등록 또는 시작 미확인';
+    // Practice that never started does not use up today's practice share.
+    if(goal.practice)goal.seen?M.practiceRan(decision,plan,minute):M.practiceMissed(decision,plan,minute);
     // A short practice can earn XP without a level-up. Do not call it a failed action.
     if(goal.practice&&goal.seen)M.note(decision,plan,'preparing',reason,'일상 병행 후 다른 연습 대상 재검토',minute);
     else{
@@ -668,7 +672,7 @@
     var skillBaseline=null;
     if(practice){
      if(!M.practiceAllowed(decision,plan,minute)){
-      M.note(decision,plan,'waiting','오늘 준비 연습 3회 · 일상생활 우선','다음 게임 날짜에 연습 재검토',minute);return false;
+      M.note(decision,plan,'waiting','오늘 준비 연습 '+M.practiceLimit(plan)+'회 실행 · 일상생활 우선','다음 게임 날짜에 연습 재검토',minute);return false;
      }
      skillBaseline=await skillEvidence(member,condition.conditionId1);
      if(!skillBaseline){
@@ -789,7 +793,8 @@
      if(nativeSkill)reason='게임 조건: '+nativeSkill.label;
      if(!nativeTags.length&&skill&&await ensureTraining(skill)){
       if(memory.prep&&memory.prep.skill===skill&&memory.prep.grown){memory.prep.grown=null;memory.prep.rounds=(memory.prep.rounds||1)+1;}
-      if(!memory.prep||memory.prep.skill!==skill||(memory.prep.rounds||1)<=5){
+      // An ambition is kept until it is achieved, however many practice rounds it takes.
+      if(!memory.prep||memory.prep.skill!==skill||plan.kind==='ambition'||(memory.prep.rounds||1)<=5){
        M.prepare(decision,plan,{kind:'skill',skill:skill,requiredLevel:nativeSkill?nativeSkill.need:null,need:nativeSkill?skill+' Lv.'+nativeSkill.need:skill+' 기술',
         label:skill+' 연습',reason:reason},minute);
        var preparation=R.block(memory,'skill',minute,reason);
@@ -857,7 +862,7 @@
     }
     var retry=decision.goalRetry&&decision.goalRetry[plan.name];
     // A preparation step (e.g. an inferred missing skill) runs before the original condition.
-    var prep=memory.prep&&memory.prep.kind==='skill'&&!memory.prep.grown&&minute-memory.prep.since<3*1440?memory.prep:null;
+    var prep=memory.prep&&memory.prep.kind==='skill'&&!memory.prep.grown&&(plan.kind==='ambition'||minute-memory.prep.since<3*1440)?memory.prep:null;
     if(prep&&await ensureTraining(prep.skill)){
      if(await attemptCondition(plan,{conditionType:'SkillLevel',conditionId1:prep.skill},progress,label,retry,plan.name))return true;
      // No practice was possible right now: still look at the original condition, which may have opened up.
