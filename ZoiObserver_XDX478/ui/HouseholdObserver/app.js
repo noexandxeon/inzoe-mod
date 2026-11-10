@@ -1,6 +1,6 @@
 (function () {
  'use strict';
- var VERSION='0.6.17', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.6.18', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var A=ObserverAgenda, R=ObserverRecovery, Rel=ObserverRelations, M=ObserverGoalMemory;
  var ChildCare=ObserverChildCare, Score=ObserverScoreboard, CP=ObserverCareerPath, Persona=ObserverPersona, Rot=ObserverRotation, Field=ObserverFieldCheck, Family=ObserverFamily, Why=ObserverWhy;
  var claims=Family.create(), nowMinute=NaN, popupTrack=null, expectedSelected=null, lastSelected=null;
@@ -609,19 +609,12 @@
     if(!move.interaction_bag_id||Number(move.target_entity_id)!==Number(work.work_site_id)||move.requires_zoi_group)return;
     args.interaction_bag_id=move.interaction_bag_id;
     args.target_entity_id=String(move.target_entity_id);
-    var jumpTo=work.work_site_id;
    }
    if(snapshot.queue.current&&snapshot.queue.current.interaction_bag_id===args.interaction_bag_id)return;
    var latest=await cli('career.get_work_status',{entity_id:id});
    if(latest.is_at_work||latest.work_site_id!==work.work_site_id||!(latest.is_working_time||latest.is_commute_time))return;
-   // 0.6.16: a workplace that is a real place is reached with the game's instant move; the walk covers the last steps.
-   // In game the walk to the office took close to two real minutes at 5x speed, several game hours of the work day.
-   if(jumpTo>0){
-    try{
-     var spot=((await cli('world.get_loaded_sites')).sites||[]).find(function(s){return Number(s.entity_id)===Number(jumpTo);});
-     if(spot&&spot.id)await write('movement.teleport',{entity_id:id,destination:String(spot.id)},token);
-    }catch(_){}
-   }
+   // 0.6.18: the instant move is not used for the commute. Tried in game (0.6.17): after the jump to the office the
+   // Zoi turned round and walked home during working hours and the work day was lost.
    await write('interaction.execute',args,token);
    decision.commutePending=true;
    decision.commuteBag=args.interaction_bag_id;
