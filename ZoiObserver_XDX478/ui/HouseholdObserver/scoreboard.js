@@ -134,7 +134,7 @@
  // Follows the hopes the game currently lists for a Zoi. A hope that leaves the list is settled
  // from the mission record: finished → completed (once); otherwise gone, with the reason known.
  // selected: [{name,instance,expire}] · missions: the Mission component's missionMap (or null if unread).
- function hopes(state,minute,zoi,selected,missions){
+ function hopes(state,minute,zoi,selected,missions,acted){
   var s=book(state), id=String(zoi), all=s.hopes||(s.hopes={}), mine=all[id]||(all[id]={}), settled=[];
   var live={};
   (selected||[]).forEach(function(h){
@@ -146,6 +146,10 @@
     event(state,{minute:minute,zoi:zoi,kind:'offered',key:k,name:h.name});
    }
   });
+  // How many unexpired hopes leave in this look: more than one is the game clearing the list.
+  var leaving=Object.keys(mine).filter(function(k){
+   return !live[k]&&!mine[k].done&&!(Number.isFinite(mine[k].expire)&&minute>=mine[k].expire);
+  }).length;
   Object.keys(mine).forEach(function(k){
    var record=missions&&missions['(Value='+k+')'], w=mine[k];
    if(record&&record.bIsFinished&&!w.done){
@@ -158,6 +162,12 @@
    // Left the list. Without the mission record nothing is concluded yet; ask again next time.
    if(!missions)return;
    var reason=Number.isFinite(w.expire)&&minute>=w.expire?'expired':'unverified';
+   // A finished hope can leave with its mission record. An observed action supports an inference.
+   if(reason==='unverified'&&leaving===1&&acted&&acted(w.name,k)){
+    if(event(state,{minute:minute,zoi:zoi,kind:'hope_completed',key:k,name:w.name,evidence:'action'}))settled.push({name:w.name,outcome:'acted'});
+    delete mine[k];
+    return;
+   }
    if(event(state,{minute:minute,zoi:zoi,kind:'hope_gone',key:k,name:w.name,reason:reason}))settled.push({name:w.name,outcome:reason});
    delete mine[k];
   });
@@ -250,6 +260,62 @@
   });
   return out;
  }
+ function startCheckpoint(state,now){
+  var s=book(state);
+  if(!s.runId)s.runId=String(now)+'-'+Math.random().toString(36).slice(2);
+  return s;
+ }
+ function checkpoint(state,minute,scope,household,map){
+  var s=book(state), people={};
+  s.recordedAt=minute;
+  // A revision tells two checkpoints apart when the game is paused and the minute does not move.
+  s.rev=(Number(s.rev)||0)+1;
+  Object.keys(state.people||{}).forEach(function(id){
+   var p=state.people[id], goals={}, marks={};
+   Object.keys(p.goalMemory||{}).forEach(function(key){
+    if(p.goalMemory[key].scored)goals[key]=p.goalMemory[key].scored;
+   });
+   if(Object.keys(goals).length)marks.goals=goals;
+   if(p.goal&&p.goal.scored)marks.goal={instance:p.goal.instance,at:p.goal.sentAt,bag:p.goal.bag};
+   if(p.outing&&p.outing.scored)marks.outing={site:p.outing.site,start:p.outing.start,goalVisit:p.outing.goalVisit,found:p.outing.scoredFound};
+   if(Object.keys(marks).length)people[id]=marks;
+  });
+  return {v:1,scope:scope,household:String(household),map:map,minute:minute,score:s,period:state.periodicScore||null,people:people};
+ }
+ function restoreCheckpoint(state,copy,minute,scope,household,map,now){
+  var saved=book(state), newer=copy&&copy.score;
+  // 0.6.19: a fresh observer (the mod reloaded while the game kept running) has no run of its own yet.
+  // It used to refuse the checkpoint and overwrite it, losing every earlier day on each live update.
+  var fresh=!saved.runId;
+  if(!copy||copy.v!==1||copy.scope!==scope||copy.household!==String(household)||copy.map!==map||
+     !newer||!newer.runId||!fresh&&newer.runId!==saved.runId||!newer.days||!Number.isFinite(copy.minute))return false;
+  if(minute<copy.minute){
+   // The player went back to an older point. Keep that save's history and start a separate reporting run.
+   delete saved.runId;
+   startCheckpoint(state,now);
+   return false;
+  }
+  if(!fresh&&(saved.recordedAt>copy.minute||saved.recordedAt===copy.minute&&(Number(newer.rev)||0)<=(Number(saved.rev)||0)))return false;
+  // Days the fresh observer already started are kept where the checkpoint has none.
+  if(fresh)Object.keys(saved.days||{}).forEach(function(d){if(!newer.days[d])newer.days[d]=saved.days[d];});
+  state.score=newer;
+  newer.marks={};
+  if(copy.period&&copy.period.scope===scope&&copy.period.household===String(household))state.periodicScore=copy.period;
+  Object.keys(copy.people||{}).forEach(function(id){
+   var p=state.people&&state.people[id], marks=copy.people[id];
+   if(!p)return;
+   Object.keys(marks.goals||{}).forEach(function(key){
+    if(p.goalMemory&&p.goalMemory[key])p.goalMemory[key].scored=marks.goals[key];
+   });
+   var goal=marks.goal, outing=marks.outing;
+   if(goal&&p.goal&&p.goal.instance===goal.instance&&p.goal.sentAt===goal.at&&p.goal.bag===goal.bag)p.goal.scored=true;
+   if(outing&&p.outing&&p.outing.site===outing.site&&p.outing.start===outing.start&&p.outing.goalVisit===outing.goalVisit){
+    p.outing.scored=true;
+    if(outing.found)p.outing.scoredFound=true;
+   }
+  });
+  return true;
+ }
  // Use full calendar days so neighboring reports never share a day.
  function period(state,minute,scope,household){
   var day=dayOf(minute);
@@ -308,7 +374,7 @@
    return null;
   }
   var id=String(household).replace(/[^a-z0-9_-]/gi,'_');
-  run.pending={key:'observer-15d-'+id+'-'+run.fromDay+'-'+(end-1)+'-'+now,
+  run.pending={key:'observer-15d-'+id+'-'+run.fromDay+'-'+(end-1)+'-'+scope+'-'+(book(state).runId||now),
    range:range,score:report(state,run.fromDay,end)};
   return run.pending;
  }
@@ -318,7 +384,8 @@
   run.fromDay=pending.range.toDayExclusive;
   delete run.pending;
  }
- var api={dueReport:dueReport,reportSaved:reportSaved,PERIOD_DAYS:PERIOD_DAYS,house:house,unattended:unattended,houseLine:houseLine,TARGET:TARGET,memory:memory,event:event,observe:observe,hopes:hopes,hopesChanged:hopesChanged,summary:summary,line:line,report:report,dayOf:dayOf};
+ var api={dueReport:dueReport,reportSaved:reportSaved,PERIOD_DAYS:PERIOD_DAYS,house:house,unattended:unattended,houseLine:houseLine,TARGET:TARGET,memory:memory,event:event,observe:observe,hopes:hopes,hopesChanged:hopesChanged,summary:summary,line:line,report:report,dayOf:dayOf,
+  startCheckpoint:startCheckpoint,checkpoint:checkpoint,restoreCheckpoint:restoreCheckpoint};
  if(typeof module!=='undefined'&&module.exports)module.exports=api;
  else root.ObserverScoreboard=api;
 })(this);

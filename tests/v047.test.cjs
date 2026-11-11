@@ -35,7 +35,8 @@ test('goals can queue behind an autonomous action, not while sleeping or with a 
   assert.equal(L.goalReady({queue_count: 0, current: {interaction_bag_id: 'Creation_MoveTo_Computer'}}, {}), true);
   assert.equal(L.goalReady({queue_count: 0, current: {interaction_bag_id: 'KebabCart_Eat'}}, {}), true);
   assert.equal(L.goalReady({queue_count: 1, current: null}, {}), true);
-  assert.equal(L.goalReady({queue_count: 4, current: null}, {}), false);
+  assert.equal(L.goalReady({queue_count: 4, current: null}, {}), true);
+  assert.equal(L.goalReady({queue_count: 6, current: null}, {}), false);
   assert.equal(L.goalReady({queue_count: 0, current: {interaction_bag_id: 'Sleep_Bed01'}}, {}), false);
   assert.equal(L.goalReady({queue_count: 0, current: {interaction_bag_id: 'Go_Work'}}, {}), false);
 });

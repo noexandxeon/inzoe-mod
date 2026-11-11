@@ -114,21 +114,24 @@ function lifeHarness(opts = {}) {
    if (args.Component === 'Skill') return {skills:{}};
    if (args.Component === 'Hope') return {selectedHopes:[{hopeId:'PaintGoal', missionId:{value:100}}]};
    if (args.Component === 'Mission') return {missionMap:{'(Value=100)':{bIsFinished:finished,conditionStates:[{currentCount:0,goalCount:1,compareType:'GreaterOrEqual'}]}}};
+   if (opts.school) return {locatedSiteId:{value:args.entity_id==='20'&&opts.offSite?31:30}};
    return {};
   }
   if (name === 'data.table_get' && args.Alias === 'Hope') return {missionId:'M1'};
-  if (name === 'data.table_get' && args.Alias === 'Mission') return {conditions:[{conditionType:'InteractionBagCount', conditionId1:opts.bag||'PaintMasterpiece'}]};
+  if (name === 'data.table_get' && args.Alias === 'Mission') return {conditions:[{conditionType:opts.condition||'InteractionBagCount', conditionId1:opts.bag||'PaintMasterpiece'}]};
   if (name === 'interaction.search') return {results:[{interaction_bag_id:opts.bag||'PaintMasterpiece'}]};
   if (name === 'world.get_loaded_sites') return {map_id:'Cahaya_Map', sites:opts.sites||[{entity_id:30, id:'Home'}]};
   if (name === 'build.get_site_info') return {site_id:'Home', site_type:'Residence'};
   if (name === 'build.scan_objects') return {total:objects.length, objects};
   if (name === 'interaction.list_available') {
+   if(opts.school)return {interactions:[{enabled:easelEnabled,interaction_bag_id:opts.bag||'PaintMasterpiece',display_name:'동아리 물어보기'}]};
    const list = [{enabled:easelEnabled, interaction_bag_id:'PaintMasterpiece', display_name:'걸작 그리기', disabled_reason:easelEnabled?undefined:'미술 기술이 부족합니다'}];
    list.push({enabled:true, interaction_bag_id:'Art_Easel_Drawing', display_name:'그림 연습'});
    return {interactions:list};
   }
   if (name === 'schedule.diagnose') return {has_schedule:true};
-  if (name === 'interaction.get_queue') return {queue_count:0};
+  if (name === 'entity.scan_characters'&&opts.school)return {Characters:[{entity_id:20}]};
+  if (name === 'interaction.get_queue') return opts.latestQueue||{queue_count:0};
   throw Error('Unexpected CLI ' + name + ' ' + JSON.stringify(args));
  };
  const members = opts.members || [member];
@@ -139,6 +142,32 @@ function lifeHarness(opts = {}) {
   art:n=>art=n, enable:()=>easelEnabled=true, finish:()=>finished=true};
 }
 const time = {day:0, hour:10, minute:0};
+test('an enabled school conversation is requested locally and attached to the original hope',async()=>{
+ const h=lifeHarness({school:true,easelEnabled:true,bag:'Co_School_Club_01'});
+ assert.equal(await h.actions.pursueSchoolHope(h.member,h.character,h.decision,h.snapshot,time,600,1,30),true);
+ assert.equal(h.writes[0][1].target_entity_id,'20');
+ assert.equal(h.decision.goal.instance,100);
+ assert.match(h.logs[0],/학교 소망 행동 요청/);
+});
+
+test('only the requested action and target support an inferred hope completion',async()=>{
+ const h=lifeHarness({easelEnabled:true});
+ assert.equal(await h.actions.pursueHope(h.member,h.character,h.decision,h.snapshot,time,600,1),true);
+ const goal=h.decision.goal, item=h.decision.goalPlans[0].memory;
+ h.actions.observeGoalAction(h.decision,{entries:[{bag:goal.bag,target:'20'}]},615);
+ h.actions.observeGoalAction(h.decision,{current:{interaction_bag_id:goal.bag,target_entity_id:21,state:'Playing'}},620);
+ assert.equal(M.acted(item,620),false);
+ h.actions.observeGoalAction(h.decision,{current:{interaction_bag_id:goal.bag,target_entity_id:20,state:'Playing'}},625);
+ assert.equal(M.acted(item,630),true);
+});
+
+test('school hopes cannot target another site, start after class has begun, or trigger a trip',async()=>{
+ for(const opts of [{offSite:true},{latestQueue:{queue_count:0,current:{interaction_bag_id:'Bag_AutoFind_Chair_Sit_ListenClass'}}},{condition:'EnterSiteCount'}]){
+  const h=lifeHarness({school:true,easelEnabled:true,bag:'Co_School_Club_01',...opts});
+  assert.equal(await h.actions.pursueSchoolHope(h.member,h.character,h.decision,h.snapshot,time,600,1,30),false);
+  assert.equal(h.writes.length,0);
+ }
+});
 test('a disabled goal action with a skill reason becomes practice, growth, then a retry of the original goal', async () => {
  const h = lifeHarness();
  // The same turn diagnoses the missing skill and queues a suitable practice.
@@ -327,7 +356,8 @@ test('returning from a trip resumes a Start that the loaded city save does not c
  assert.equal(R.resumeDecision({enabled:false}, {...mirror, stoppedByUser:true}, household, game, 2000), null);
  assert.equal(R.resumeDecision({enabled:false}, {...mirror, enabled:false}, household, game, 2000), null);
  assert.equal(R.resumeDecision({enabled:false}, {...mirror, household:'99', awayTravel:null}, household, game, 2000), null);
- assert.equal(R.resumeDecision({enabled:false}, mirror, household, game, 1000 + 7*3600*1000), null);
+ // 0.6.20: a later continue (the next morning) still resumes; only the player's Stop keeps it off.
+ assert.equal(R.resumeDecision({enabled:false}, mirror, household, game, 1000 + 7*3600*1000).enable, true);
  assert.equal(R.resumeDecision({enabled:true}, mirror, household, game, 2000).enable, false);
 });
 test('payments and replies handled after the last save are merged back, never removed', () => {
@@ -354,10 +384,67 @@ function appHarness(execute, beforeSave) {
   }}, view:{show(){shows++;}}, trigger:{onActivated:fn=>trigger=fn}, saveState:{register(){}, onLoad:fn => deliver = fn}},
   setInterval:(fn, ms) => intervals.set(ms, fn), setTimeout:() => 0, clearTimeout(){}, addEventListener(){}, Date});
  context.window = context;
- for (const name of ['window','policy','protocol','life','child-care','game-data','goal-memory','scoreboard','agenda','recovery','career-path','persona','why','family','rotation','fieldcheck','relations','gathering','choices','life-actions','panels','travel','app'])
+ for (const name of ['window','policy','protocol','life','child-care','game-data','goal-memory','scoreboard','agenda','recovery','career-path','persona','why','duty','family','rotation','fieldcheck','relations','gathering','choices','life-actions','panels','travel','app'])
   vm.runInContext(fs.readFileSync(path.join(ui, name + '.js'), 'utf8'), context, {filename:name + '.js'});
  return {context, intervals, saved, elements, load:value => deliver(JSON.stringify(value)), trigger:event=>trigger(event), shows:()=>shows};
 }
+test('the anonymous youth growth notice confirms only the matching native drama and harmless button',async()=>{
+ const member={entity_id:1,first_name:'예성',last_name:'윤',household_id:11,age_group:'Youth'};
+ const row={iD:'ChangeGrowthStep_Youth',popupType:'Drama',title:'TITLE',desc:'DESC',buttonDetail:[
+  {listKey:'btn1',buttonType:'Secondary',scriptId:'Open_HopeLife_Selection_UI',buttonText:'LIFE'},
+  {listKey:'btn0',buttonType:'Primary',scriptId:'None',buttonText:'OK'}
+ ]};
+ const labels={TITLE:'연령대 상승!',DESC:'{0}의 연령대가 {1}로 상승했습니다.\n\n새로운 책임과 기회가 기다립니다.',LIFE:'소망하는 삶 선택',OK:'확인'};
+ const popup={popup_id:'None',desc:'윤 예성의 연령대가 청년으로 상승했습니다.\n\n새로운 책임과 기회가 기다립니다.',buttons:[
+  {index:0,list_key:'btn1',text:'소망하는 삶 선택',dimmed:false},{index:1,list_key:'btn0',text:'확인',dimmed:false}
+ ]};
+ let open=true;
+ const writes=[];
+ const blocking=()=>open?{popup_count:1,primary_detail:'None',pause_reasons:['DramaPopup']}:{popup_count:0};
+ const h=appHarness((name,args)=>{
+  if(name==='game.get_state')return {phase:'in_game',map_id:'Gangnam_Map',possessed_entity_id:1,blocking:blocking()};
+  if(name==='environment.get_time')return {day:1,hour:0,minute:20};
+  if(name==='environment.get_simulation')return {is_paused:true};
+  if(name==='household.get_members')return {household_id:11,members:[member]};
+  if(name==='ui.get_blocking')return {...blocking(),popups:open?[popup]:[]};
+  if(name==='data.table_get'&&args.Row==='ChangeGrowthStep_Youth')return row;
+  if(name==='l10n.get')return labels;
+  if(name==='ui.get_tree')return {ui_type:'DramaPopup',label:'연령대 상승!'};
+  if(name==='cli.help')return {id:args.command,access:'Public'};
+  if(name==='ui.click_popup_button'){writes.push({...args});open=false;return {clicked:true};}
+  return {};
+ });
+ h.load({schema:1,enabled:true,household:11,people:{}});
+ await h.intervals.get(10000)();
+ assert.deepEqual(writes,[{list_key:'btn0'}]);
+ const choice=h.context.ObserverChoices.youthNotice;
+ const tree={ui_type:'DramaPopup',label:'연령대 상승!'};
+ assert.equal(choice({...popup,desc:'다른 조이의 연령대가 상승했습니다. 새로운 책임과 기회가 기다립니다.'},row,labels,tree,member),null);
+ assert.equal(choice(popup,row,labels,{...tree,label:'구매하시겠습니까?'},member),null);
+ assert.equal(choice(popup,{...row,buttonDetail:[row.buttonDetail[0],{...row.buttonDetail[1],scriptId:'Purchase'}]},labels,tree,member),null);
+});
+test('an unsupported team project result keeps its visible button in the report without clicking it',async()=>{
+ const popup={popup_id:'TeamProjectResultPopup',desc:'프로젝트 결과',buttons:[]}, clicks=[];
+ const h=appHarness((name,args)=>{
+  if(name==='game.get_state')return {phase:'in_game',map_id:'Gangnam_Map',possessed_entity_id:1,blocking:{popup_count:1,primary_detail:popup.popup_id}};
+  if(name==='environment.get_time')return {day:1,hour:15,minute:0};
+  if(name==='environment.get_simulation')return {is_paused:true};
+  if(name==='household.get_members')return {household_id:11,members:[{entity_id:1,first_name:'예성',household_id:11}]};
+  if(name==='ui.get_blocking')return {popups:[popup]};
+  if(name==='ui.list_windows')return {windows:[{layer:'Popup',ui_type:'CommonPopup',window:'WBP_ProjectResult'}]};
+  if(name==='ui.get_tree'){
+   assert.equal(args.Window,'WBP_ProjectResult');
+   return {ui_type:'CommonPopup',label:'팀 프로젝트 결과',nodes:[{role:'button',ref:'WBP_ProjectResult/Button',text:'닫기'}]};
+  }
+  if(name==='ui.click_popup_button')clicks.push(args);
+  return {};
+ });
+ h.load({schema:1,enabled:true,household:11,people:{}});
+ await h.intervals.get(10000)();
+ assert.equal(clicks.length,0);
+ const report=JSON.parse(h.saved['observer-auto']);
+ assert.equal(report.popupHolds[0].window.buttons[0].text,'닫기');
+});
 test('the game loop saves one 15-day archive, retries a failed write and preserves the usual reports', async () => {
  let day=0, now=1000000, writes=[], failed=false;
  const h=appHarness(name=>{
@@ -405,6 +492,93 @@ test('the game loop saves one 15-day archive, retries a failed write and preserv
  assert.ok(h.saved['observer-auto']);
  await cycle();
  assert.equal(writes.length,2);
+});
+test('the observer restores a newer scoreboard and report window from the same continuing save', async () => {
+ let minute=10, now=1000000;
+ const make=()=>appHarness(name=>{
+  if(name==='game.get_state')return {phase:'in_game',map_id:'Cahaya_Map',possessed_entity_id:1,blocking:{}};
+  if(name==='environment.get_time')return {day:4,hour:10,minute};
+  if(name==='environment.get_simulation')return {is_paused:true};
+  if(name==='household.get_members')return {household_id:11,members:[{entity_id:1,first_name:'가',household_id:11}]};
+  return {};
+ });
+ const active=make(), key='observer-score-current-11';
+ active.context.Date=class extends Date {static now(){return now;}};
+ active.load({schema:1,enabled:true,household:11,people:{}});
+ await active.intervals.get(10000)();
+ const S=active.context.ObserverScoreboard, state=active.context.wf.state;
+ const earlier=JSON.parse(JSON.stringify(state)), id=state.score.runId;
+ const event={minute:4*1440+612,zoi:1,kind:'hope_completed',key:'new-hope'};
+ S.event(state,event);
+ state.periodicScore.fromDay=3;
+ minute=14;now+=17000;
+ await active.intervals.get(10000)();
+ const checkpoint=active.saved[key];
+ assert.equal(JSON.parse(checkpoint).score.days['4'].people['1'].completed,1);
+
+ const resumed=make();
+ resumed.context.Date=active.context.Date;
+ resumed.saved[key]=checkpoint;
+ minute=15;now+=1000;
+ resumed.load(earlier);
+ await resumed.intervals.get(10000)();
+ const restored=resumed.context.wf.state;
+ assert.equal(restored.score.runId,id);
+ assert.equal(restored.periodicScore.fromDay,3);
+ assert.equal(restored.score.days['4'].people['1'].completed,1);
+ assert.equal(resumed.context.ObserverScoreboard.event(restored,event),false);
+
+ const rewind=make();
+ rewind.context.Date=active.context.Date;
+ rewind.saved[key]=checkpoint;
+ minute=10;now+=1000;
+ rewind.load(earlier);
+ await rewind.intervals.get(10000)();
+ const earlierState=rewind.context.wf.state;
+ assert.notEqual(earlierState.score.runId,id);
+ assert.equal(earlierState.periodicScore.fromDay,5);
+ assert.equal(earlierState.score.days['4'],undefined);
+});
+test('0.6.19: a live reload of the mod (empty observer state) restores the scoreboard instead of overwriting it', async () => {
+ let minute=10, now=2000000;
+ const make=()=>appHarness(name=>{
+  if(name==='game.get_state')return {phase:'in_game',map_id:'Cahaya_Map',possessed_entity_id:1,blocking:{}};
+  if(name==='environment.get_time')return {day:4,hour:10,minute};
+  if(name==='environment.get_simulation')return {is_paused:true};
+  if(name==='household.get_members')return {household_id:11,members:[{entity_id:1,first_name:'가',household_id:11}]};
+  return {};
+ });
+ const key='observer-score-current-11', active=make();
+ active.context.Date=class extends Date {static now(){return now;}};
+ active.load({schema:1,enabled:true,household:11,people:{}});
+ await active.intervals.get(10000)();
+ const S=active.context.ObserverScoreboard, state=active.context.wf.state, id=state.score.runId;
+ S.event(state,{minute:3*1440+600,zoi:1,kind:'hope_completed',key:'yesterday'});
+ minute=14;now+=17000;
+ await active.intervals.get(10000)();
+ const checkpoint=active.saved[key];
+ const reloaded=make();
+ reloaded.context.Date=active.context.Date;
+ reloaded.saved[key]=checkpoint;
+ minute=15;now+=1000;
+ reloaded.load({schema:1,enabled:true,household:11,people:{}});
+ await reloaded.intervals.get(10000)();
+ const after=reloaded.context.wf.state;
+ assert.equal(after.score.runId,id);
+ assert.equal(after.score.days['3'].people['1'].completed,1);
+});
+test('0.6.19: a newer checkpoint written in the same paused game minute is restored', () => {
+ const S=require(path.join(ui,'scoreboard.js'));
+ const state={score:{days:{},seen:{}},people:{}};
+ S.startCheckpoint(state,1);
+ const first=JSON.parse(JSON.stringify(S.checkpoint(state,600,'current',11,'M')));
+ S.event(state,{minute:600,zoi:1,kind:'hope_completed',key:'k'});
+ const second=JSON.parse(JSON.stringify(S.checkpoint(state,600,'current',11,'M')));
+ const back={score:JSON.parse(JSON.stringify(first.score)),people:{}};
+ assert.equal(S.restoreCheckpoint(back,second,600,'current',11,'M',2),true);
+ assert.equal(back.score.days['0'].people['1'].completed,1);
+ const same={score:JSON.parse(JSON.stringify(second.score)),people:{}};
+ assert.equal(S.restoreCheckpoint(same,first,600,'current',11,'M',2),false);
 });
 test('the quick observer sees a different household member start and finish a goal without issuing a command', async () => {
  const calls=[], start=Date.now(), adult={entity_id:1,first_name:'가',household_id:11,age_group:'Adult'};

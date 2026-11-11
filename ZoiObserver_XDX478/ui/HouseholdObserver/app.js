@@ -1,6 +1,6 @@
 (function () {
  'use strict';
- var VERSION='0.6.2', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
+ var VERSION='0.6.20', P=ObserverPolicy, L=ObserverLife, C=ObserverChoices, protocol=ObserverProtocol, state=wf.state;
  var A=ObserverAgenda, R=ObserverRecovery, Rel=ObserverRelations, M=ObserverGoalMemory;
  var ChildCare=ObserverChildCare, Score=ObserverScoreboard, CP=ObserverCareerPath, Persona=ObserverPersona, Rot=ObserverRotation, Field=ObserverFieldCheck, Family=ObserverFamily, Why=ObserverWhy;
  var claims=Family.create(), nowMinute=NaN, popupTrack=null, expectedSelected=null, lastSelected=null;
@@ -12,12 +12,13 @@
  var popupTries=0, nextPopupTry=0, checkingPopup=false, watching=false, calendar=null;
  var playedGroups=[], rosterAt=0, rosterMap='';
  var scheduleCancel=null, nextPeriodicSave=0;
+ var scoreStore=null;
  var receiptSerial=0;
  var lastPendingPoll=0, queueSampleAt={};
  var pausedUntil=0, firstError=0, pendingResume=true, lastMirror=0, mirrorStopped=false;
  var timerKeys=['nextAutonomy','nextHope','nextCommute','nextTalk','nextPlanning','nextNeed','nextCleaning','nextRepair',
   'nextHopeAction','nextSide','nextOuting','nextHousePlan','nextFurnish','nextPhone','nextPhoneAction',
-  'nextTaste','nextParcel','nextMarket','nextCatShop','nextAmbition','nextAmbitionAction','nextVacation','nextGoalFurnish','ambitionTurn'];
+  'nextTaste','nextParcel','nextMarket','nextCatShop','nextAmbition','nextAmbitionAction','nextVacation','nextGoalFurnish','nextSchoolHope','ambitionTurn'];
  function resetTimers(p,minute){timerKeys.forEach(function(key){p[key]=minute||0;});}
  // Why this Zoi is not being asked to do anything right now (read-only view of every running wait).
  function whyContext(m,id){
@@ -45,6 +46,7 @@
  }
  init();
  var gameData=ObserverGameData.create(cli);
+ var duty=ObserverDuty.create({cli:cli,write:write,row:gameData.row},L,R);
  var life=ObserverLifeActions.create({cli:cli,write:write,log:log,state:state,gameData:gameData,claims:claims,
   score:function(e){Score.event(state,e);},
   markAccepted:function(){receiptSerial++;},
@@ -130,6 +132,9 @@
    }
    var tally=Number.isFinite(p.lastMinute)&&Score.line(state,Score.dayOf(p.lastMinute),id);
    if(tally)html+='<p class="intent">'+esc(tally)+'</p>';
+   if(p.duty&&p.duty.summary&&p.duty.summary.total)
+    html+='<p class="intent">'+esc(ObserverDuty.label(p.duty.summary))+(p.duty.note?' · '+esc(p.duty.note):'')+'</p>';
+   if(p.schoolHopeNote)html+='<p class="help">'+esc(p.schoolHopeNote)+'</p>';
    if(Number.isFinite(p.lastMinute))html+='<p class="help">지금: '+esc(Why.explain(p,p.lastMinute,whyContext(m,id)))+'</p>';
    if(p.goalBlock)html+='<p>막힘: '+esc(p.goalBlock)+'</p>';
    if(ChildCare.dependent(m)&&p.childCare&&p.childCare.status)html+='<p>돌봄: '+esc(p.childCare.status)+'</p>';
@@ -353,12 +358,15 @@
  }
  async function watchPending(game,token){
   var now=Date.now();
-  if(!state.enabled||token!==epoch||now-lastPendingPoll<3000)return;
+  // 0.6.14: at 5x speed a 3-second look at a requested action is 7 game minutes apart, so short actions (drink water,
+  // read a book) started and ended unseen: in game 9 hopes left right after their request and only 1 could be counted.
+  var gap=gameSpeed>=4?1200:gameSpeed>=2?2000:3000;
+  if(!state.enabled||token!==epoch||now-lastPendingPoll<gap)return;
   if(state.scope!=='played'&&!members.some(function(m){return String(m.entity_id)===String(game.possessed_entity_id);}))return;
   var oldest=Infinity, member=null;
   members.forEach(function(m){
    var id=String(m.entity_id), decision=state.people[id], sampled=queueSampleAt[id]||0;
-   if(!decision||sampled>=oldest||now-sampled<2500)return;
+   if(!decision||sampled>=oldest||now-sampled<gap-500)return;
    var action=decision.lastAction;
    if(decision.goal||action&&action.status!=='ended'&&now-action.at<120000){oldest=sampled;member=m;}
   });
@@ -379,7 +387,7 @@
  async function report(manual){
   var why={};
   members.forEach(function(m){var id=String(m.entity_id), p=state.people[id];if(p&&Number.isFinite(p.lastMinute))why[id]=Why.report(p,p.lastMinute,whyContext(m,id));});
-  var payload={why:why,fieldCheck:state.fieldCheck||null,rotation:state.rotation||null,score:Score.report(state),gameData:gameData.summary(),queueSample:state.queueSample||null,execTrail:state.execTrail||[],daily:state.daily||{},lastReturn:state.lastReturn||null,version:VERSION,created:new Date().toISOString(),enabled:state.enabled,scope:state.scope,background:state.background,household:state.household,status:status,game:lastGame,popup:blockedPopup,travel:state.travel,awayTravel:state.awayTravel,news:panels.latestNews(),members:members,snapshots:snapshots,decisions:state.people,capabilities:caps,logs:logs,last_cycle:lastCycle};
+  var payload={why:why,fieldCheck:state.fieldCheck||null,rotation:state.rotation||null,score:Score.report(state),gameData:gameData.summary(),queueSample:state.queueSample||null,execTrail:state.execTrail||[],daily:state.daily||{},lastReturn:state.lastReturn||null,version:VERSION,created:new Date().toISOString(),enabled:state.enabled,scope:state.scope,background:state.background,household:state.household,status:status,game:lastGame,popup:blockedPopup,popupHolds:state.popupHolds||[],travel:state.travel,awayTravel:state.awayTravel,news:panels.latestNews(),members:members,snapshots:snapshots,decisions:state.people,capabilities:caps,logs:logs,last_cycle:lastCycle};
   await cli('uimod.cfg_save',{mod_id:wf.MOD_ID,section:'ui/'+wf.APP_NAME+'/saved',key:manual?'observer-report':'observer-auto',value:JSON.stringify(payload)});
   lastReport=Date.now();return payload;
  }
@@ -392,14 +400,34 @@
   members.forEach(function(m){names[String(m.entity_id)]=[m.last_name,m.first_name].filter(Boolean).join(' ');});
   var payload={version:VERSION,created:new Date().toISOString(),scope:state.scope,household:state.household,
    period:pending.range,score:pending.score,names:names,
+   duty:ObserverDuty.archive(state.people,pending.range.fromDay,pending.range.toDayExclusive),
    currentPopup:popupTrack?{key:popupTrack.key,seconds:Math.round((Date.now()-popupTrack.since)/1000)}:null};
   try{
    await cli('uimod.cfg_save',{mod_id:wf.MOD_ID,section:'ui/'+wf.APP_NAME+'/saved',key:pending.key,value:JSON.stringify(payload)});
    if(epoch!==token)return;
    Score.reportSaved(state,pending);
+   await saveScoreCheckpoint(true);
    log('15일 자동 리포트 저장 / '+pending.key+'.cfg');
   }catch(e){
    log('15일 자동 리포트 저장 보류 · 1분 후 재시도 / '+e.message);
+  }
+ }
+ async function rememberPopupHold(popup){
+  var history=state.popupHolds||(state.popupHolds=[]);
+  var item={id:popup.popup_id,minute:nowMinute,at:new Date().toISOString(),desc:C.clean(popup.desc).slice(0,350),
+   buttons:(popup.buttons||[]).slice(0,8).map(function(b){return {key:b.list_key,text:C.clean(b.text).slice(0,100),dimmed:b.dimmed};})};
+  history.push(item);
+  if(history.length>8)history.shift();
+  if(item.id==='TeamProjectResultPopup'){
+   try{
+    var windows=await cli('ui.list_windows');
+    var visible=(windows.windows||[]).filter(function(w){return w.layer==='Popup';});
+    var target=visible.find(function(w){return w.ui_type===item.id;})||(visible.length===1?visible[0]:null);
+    if(!target)return;
+    var tree=await cli('ui.get_tree',{Window:target.window,max_nodes:40});
+    item.window={type:tree.ui_type,label:C.clean(tree.label),buttons:C.widgets(tree.nodes).filter(function(n){return n.role==='button'&&n.ref;}).slice(0,8)
+     .map(function(n){return {text:C.clean(n.text).slice(0,100),ref:n.ref,state:n.state};})};
+   }catch(_){}
   }
  }
  async function answerPopup(token,game){
@@ -452,12 +480,27 @@
    var button=id==='NoticeScheduleConflict'?(popup.buttons||[]).find(function(b){
     return b.dimmed===false&&/^(?:기존 일정 유지|유지하기|기존 일정 유지하기|Keep existing schedule)$/i.test(b.text||'');
    }):protocol.popupChoice(popup,row,allowed);
-   var picked=!button&&C.popup(popup,row,{busy:!!unavailable});
+   var picked;
+   if(!button&&id==='None'&&member.age_group==='Youth'&&(popup.buttons||[]).length===2&&
+      (current.pause_reasons||[]).indexOf('DramaPopup')>=0){
+    var growth=await gameData.row('Popup','ChangeGrowthStep_Youth');
+    var keys=[growth.title,growth.desc].concat((growth.buttonDetail||[]).map(function(b){return b.buttonText;}));
+    var labels=await cli('l10n.get',{Keys:JSON.stringify(keys)});
+    var tree=await cli('ui.get_tree',{Window:'DramaPopup',max_nodes:25});
+    picked=C.youthNotice(popup,growth,labels,tree,member);
+   }
+   if(!button&&!picked)picked=C.popup(popup,row,{busy:!!unavailable});
    if(picked)button=picked.button;
    var replyArgs=protocol.popupArgs(popup,button);
-   if(!replyArgs){if(popupTries===1)log('자동 응답 보류: '+id+' / 선택의 효과를 확인할 수 없음');return;}
+   if(!replyArgs){
+    if(popupTries===1){
+     log('자동 응답 보류: '+id+' / 선택의 효과를 확인할 수 없음');
+     await rememberPopupHold(popup);
+    }
+    return;
+   }
    var confirm=await cli('ui.get_blocking');
-   if(!(confirm.popups||[]).some(function(p){return p.popup_id===id&&p.desc===popup.desc&&
+   if((confirm.popups||[]).length!==1||!confirm.popups.some(function(p){return p.popup_id===id&&p.desc===popup.desc&&
      (p.buttons||[]).some(function(b){return b.list_key===button.list_key&&b.index===button.index&&b.text===button.text&&b.dimmed===false;});}))return;
    await write('ui.click_popup_button',replyArgs,token,id,actor);
    var after=await cli('ui.get_blocking');
@@ -570,6 +613,8 @@
    if(snapshot.queue.current&&snapshot.queue.current.interaction_bag_id===args.interaction_bag_id)return;
    var latest=await cli('career.get_work_status',{entity_id:id});
    if(latest.is_at_work||latest.work_site_id!==work.work_site_id||!(latest.is_working_time||latest.is_commute_time))return;
+   // 0.6.18: the instant move is not used for the commute. Tried in game (0.6.17): after the jump to the office the
+   // Zoi turned round and walked home during working hours and the work day was lost.
    await write('interaction.execute',args,token);
    decision.commutePending=true;
    decision.commuteBag=args.interaction_bag_id;
@@ -642,10 +687,22 @@
   var wantsRelationship=snapshot.hope.selected.some(function(h){return /StartRomance|MakeFriends|Lover|Friendship|Marri|Date/i.test(h.hope_id);})||
    (decision.goalPlans||[]).some(function(p){return p.conditions.some(function(c){return /TalkInteractionBagTag|NewRelationshipCount|RelationshipCount|Marriage/.test(c.conditionType);});});
   var socialNeed=stats.Society&&stats.Society.pct<=(outgoing?75:60);
-  if(!onlyGoal)decision.nextTalk=minute+(outgoing?75:120);
+  // Without two close ties the Zoi keeps building them: sooner, and with the people it already knows best.
+  var bond=decision.bond;
+  if(!bond||!(minute>=bond.at&&minute-bond.at<360)){
+   try{
+    var listed=await cli('relationships.list',{owner_id:String(member.entity_id)});
+    bond=Rel.bonds(listed.relationships);bond.at=minute;
+    if(bond.close<2&&!(decision.bond&&decision.bond.close<2))log(member.first_name+': 가까운 관계 '+bond.close+'명 · 아는 사람과 관계를 이어 갑니다');
+    decision.bond=bond;
+   }catch(_){bond=decision.bond||null;}
+  }
+  var building=!!bond&&bond.close<2;
+  if(!onlyGoal)decision.nextTalk=minute+(building?45:outgoing?75:120);
   var id=String(member.entity_id), book=lifeBook(), contacts=(book.contacts||{})[id]||{};
   try{
    var targets=await nearbyTargets(member,character);
+   if(building&&!onlyGoal)targets=Rel.bondOrder(targets,bond.favor);
    for(var i=0;i<targets.length;i++){
     var other=targets[i], targetId=String(other.entity_id), known=contacts[targetId];
     // Someone who reacted badly recently gets time; the Zoi looks for another person instead.
@@ -679,7 +736,7 @@
       await life.affection(member,other,decision,snapshot,available.interactions,relationship,minute,token):false;
      if(affectionate){decision.talkRequest={target:targetId,bag:affectionate.bag,at:minute};return true;}
     }
-    if(!related&&!wantsRelationship&&!socialNeed)continue;
+    if(!related&&!wantsRelationship&&!socialNeed&&!building)continue;
     var choice=related?related.action:conversationChoice(available.interactions,relationship,decision,targetId,minute);
     if(!choice)continue;
     if(choice.interaction_bag_id==='Co_Friendship_Positive_FocusSelection_Up2step'){
@@ -700,7 +757,7 @@
     return true;
    }
    // Nobody suitable around while lonely: go where people are.
-   if(!onlyGoal&&!gathering.waiting(decision)&&stats.Society&&stats.Society.pct<=35)
+   if(!onlyGoal&&!gathering.waiting(decision)&&stats.Society&&(stats.Society.pct<=35||building))
     return await life.socialOuting(member,character,decision,snapshot,{hour:Math.floor(minute%1440/60)},minute,token);
   }catch(e){log(member.first_name+': 대화 요청 보류 - '+e.message);}
   return false;
@@ -733,6 +790,8 @@
    resetTimers(p,0);
    p.lastCareerMinute=undefined;p.idleSince=undefined;p.commutePending=false;
    p.goal=null;p.outing=null;p.scheduleChoice=null;p.lastAction=null;p.furnitureRetries={};p.wants=null;
+   p.mealAttempt=null;p.mealCooldown={};
+   if(p.duty){p.duty.pending=null;p.duty.skip=null;}
   }
   p.lastMinute=minute;
   var character=await cli('entity.reflect',args);
@@ -789,6 +848,7 @@
    replies:!!p.pendingReplies}),minute);
   if(chosen&&p.wants)p.wants=null;
   if(!state.enabled||token!==epoch||!sameCity)return;
+  life.observeGoalAction(p,queue,minute);
   await keepScore(m,p,hope,stats,work,sleeping,minute);
   try{await vocation.review(m,p,minute);}catch(e){log(m.first_name+': 진로 확인 보류 / '+e.message);}
   try{await gathering.review(m,p,minute);}catch(e){log(m.first_name+': 초대 확인 보류 / '+e.message);}
@@ -811,8 +871,23 @@
    }
    if(care.reserved(m,members))return;
   }
+  var urgentDutyNeed=!!L.urgentNeed(stats.stats);
+  if(p.duty&&p.duty.schoolSite!==site)p.schoolHopeNote=null;
+  if(p.duty)p.duty.schoolSite=0;
+  try{if(await duty.run(m,character,p,snapshots[id],minute,token,chosen,!urgentDutyNeed)&&!urgentDutyNeed)return;}
+  catch(e){
+   var dutyKey='duty:'+id;
+   if(cache[dutyKey]!==e.message){cache[dutyKey]=e.message;log(m.first_name+': 기한 과제 확인 보류 / '+e.message);}
+  }
   try{if(await life.needs(m,character,p,snapshots[id],minute,token))return;}
   catch(e){log(m.first_name+': 필수 욕구 처리 보류 - '+e.message);}
+  if(p.duty&&p.duty.schoolSite){
+   if(!urgentDutyNeed){
+    try{await life.pursueSchoolHope(m,character,p,snapshots[id],time,minute,token,p.duty.schoolSite);}
+    catch(e){p.schoolHopeNote='학교 소망 확인 보류 / '+e.message;}
+   }
+   return;
+  }
   if(work.is_working_time||work.is_commute_time||work.is_at_work){
    await commute(m,p,minute,token,snapshots[id]);
    return;
@@ -910,7 +985,9 @@
     run:function(){return attempt('외출',function(){return life.outing(m,character,p,snapshots[id],time,minute,token);});}},
    {key:'gather',label:'지인 초대·파티',base:26,bonus:lonely?25:0,eligible:!p.outing&&!p.goal&&!Family.hostBusy(state.people,members,m)&&ObserverGathering.due(p,time,minute),
     run:function(){return attempt('초대',function(){return gathering.host(m,character,p,snapshots[id],time,minute,token);});}},
-   {key:'social',label:'대화·관계',base:28,bonus:needs.Society&&needs.Society.pct<25?40:lonely?20:0,run:function(){return talk(m,character,p,minute,token,snapshots[id]);}},
+   {key:'social',label:'대화·관계',base:28,duringGoal:true,bonus:needs.Society&&needs.Society.pct<25?40:lonely?20:p.bond&&p.bond.close<2?22:0,run:function(){return talk(m,character,p,minute,token,snapshots[id]);}},
+   {key:'leisure',label:'여가·기술 연습',base:14,duringGoal:false,eligible:L.idleNow(snapshots[id].queue,work),
+    run:function(){return attempt('여가',function(){return life.leisure(m,character,p,snapshots[id],skills,minute,token);});}},
    {key:'career',label:'구직·이직',base:m.has_career?8:38,eligible:ChildCare.mayJoin(m,L),
     run:function(){return attempt('진로',function(){return career(m,p,time,minute,token,profile,work,queue);});}}
   ];
@@ -918,14 +995,20 @@
   p.persona=Persona.weights(P.traits(profile.trait),CP.ambitionFocus(p.ambition),id);
   Persona.apply(tasks,p.persona);
   var context={late:time.hour>=19,lowNeeds:lowNeeds};
+  var q0=snapshots[id].queue||{}, inQueue=(Number(q0.queue_count)||0)+(q0.current?1:0);
+  var freeSlots=work.is_at_work||work.is_working_time||work.is_commute_time?1:Math.max(1,Math.min(3,L.QUEUE_LIMIT-inQueue));
   var ranked=A.order(p,tasks,minute,context);
   p.upcoming=ranked.slice(0,3).map(function(r){return r.task.label;});
   var turnStart=Date.now();
   await A.run(p,tasks,minute,context,{
    receipt:function(){return receiptSerial;},
+   // 0.6.20: the slots hook was never passed, so one task ran per look and the rest of the queue stayed empty.
+   slots:freeSlots,
    moved:function(){return (state.lastMoveAt||0)>=turnStart;},
    skip:function(task){
-   return !state.enabled||token!==epoch||(!!p.goal&&!task.duringGoal);
+   // 0.6.16: once a hope action has been seen running, the next hope may be queued behind it.
+   var nextHope=task.key==='hope'&&p.goal&&p.goal.kind==='hope'&&p.goal.seen===true&&!p.goal.practice;
+   return !state.enabled||token!==epoch||(!!p.goal&&!task.duringGoal&&!nextHope);
   }});
   A.compact(p);
   daily(time,id,p);
@@ -952,8 +1035,11 @@
      var instance=h.missionId&&typeof h.missionId==='object'?h.missionId.value:h.missionId;
      return {name:h.hopeId,instance:instance>0?instance:null,expire:Number.isFinite(expiry)?expiry/600000000:null};
     });
-    Score.hopes(state,minute,id,selected,missions.missionMap||null).forEach(function(x){
-     log(m.first_name+(x.outcome==='completed'?': 소망 완료 집계 (게임 미션 확인) / ':
+    Score.hopes(state,minute,id,selected,missions.missionMap||null,function(name,instance){
+     var item=(p.goalMemory||{})['hope:'+instance+':'+name];
+     return !!item&&M.acted(item,minute);
+    }).forEach(function(x){
+     log(m.first_name+(x.outcome==='completed'?': 소망 완료 집계 (게임 미션 확인) / ':x.outcome==='acted'?': 소망 완료 추정 (실행 관찰 뒤 종료) / ':
       x.outcome==='expired'?': 소망 기한 만료 / ':': 소망이 목록에서 빠짐 · 완료 기록 없음 / ')+x.name);
     });
    }
@@ -1037,6 +1123,9 @@
   log('여행 귀환 확인 · 미뤄 둔 생활 작업과 답장·납부를 다시 확인합니다.');
  }
  async function saveMirror(force){
+  // 0.6.20: an observer that is off only because it has not resumed yet must not write "off" over the
+  // player's running state (that is how the morning restart stayed off for good). Stop still writes.
+  if(!state.enabled&&!mirrorStopped)return;
   if(!force&&Date.now()-lastMirror<30000)return;
   lastMirror=Date.now();
   try{await cli('uimod.cfg_save',{mod_id:wf.MOD_ID,section:'ui/'+wf.APP_NAME+'/saved',key:'observer-resume',
@@ -1050,8 +1139,44 @@
    return raw&&raw.v===1?raw:null;
   }catch(_){return null;}
  }
+ async function openScoreCheckpoint(token){
+  if(!state.enabled||!state.household||state.awayTravel)return;
+  var scope=state.scope, household=String(state.household), map=lastGame.map_id;
+  var key='observer-score-'+scope+'-'+household.replace(/[^a-z0-9_-]/gi,'_');
+  if(scoreStore&&scoreStore.key===key&&scoreStore.map===map)return;
+  var copy;
+  try{
+   var res=await cli('uimod.cfg_load',{mod_id:wf.MOD_ID,section:'ui/'+wf.APP_NAME+'/saved',key:key});
+   var raw=res&&res.value!=null?res.value:res;
+   copy=typeof raw==='string'?JSON.parse(raw):raw;
+  }catch(_){}
+  if(!state.enabled||epoch!==token)return;
+  if(Score.restoreCheckpoint(state,copy,nowMinute,scope,household,map,Date.now()))
+   log('같은 저장 흐름의 최근 성적표와 15일 리포트 일정 복원');
+  Score.startCheckpoint(state,Date.now());
+  scoreStore={key:key,scope:scope,household:household,map:map,at:0,busy:false};
+ }
+ async function saveScoreCheckpoint(force){
+  var store=scoreStore, at=Date.now();
+  if(!store||store.busy||!Number.isFinite(nowMinute)||!lastGame||lastGame.loading||lastGame.phase!=='in_game'||
+     state.awayTravel||store.map!==lastGame.map_id||store.scope!==state.scope||store.household!==String(state.household)||
+     !force&&at-store.at<15000)return;
+  store.at=at;store.busy=true;
+  try{
+   var payload=Score.checkpoint(state,nowMinute,store.scope,store.household,store.map);
+   await cli('uimod.cfg_save',{mod_id:wf.MOD_ID,section:'ui/'+wf.APP_NAME+'/saved',key:store.key,value:JSON.stringify(payload)});
+   delete cache.scoreCheckpoint;
+  }catch(e){
+   if(cache.scoreCheckpoint!==e.message){cache.scoreCheckpoint=e.message;log('성적표 별도 저장 보류 / '+e.message);}
+  }finally{store.busy=false;}
+ }
+ // 0.6.6: at 5x speed a 10-second look is 24 game minutes apart (measured in game): the Zoi went to bed hungry and
+ // woke at 0%. The look now comes round faster the faster the game runs; one look still never overlaps the next.
+ var gameSpeed=1, cycleStartedAt=0;
+ function cyclePeriod(speed){return speed>=4?5000:speed>=2?7000:10000;}
+ function cycleDue(){return Date.now()-cycleStartedAt>=cyclePeriod(gameSpeed)-200;}
  async function cycle(){
-  if(busy||watching||Date.now()<pausedUntil)return;busy=true;var token=epoch;
+  if(busy||watching||Date.now()<pausedUntil)return;busy=true;var token=epoch;cycleStartedAt=Date.now();
   try{
    lastGame=await cli('game.get_state');
    // City transitions and loading screens are not errors; they must never stop the observer.
@@ -1059,6 +1184,7 @@
    await gameData.catalog();
    var time=await cli('environment.get_time');
    nowMinute=gameMinute(time);
+   gameSpeed=time.paused?1:Number(time.time_scale)||1;
    if(state.enabled&&state.travel){
     try{
      if(await travel.advance(lastGame,time,token)){
@@ -1097,6 +1223,7 @@
     if(Date.now()-lastReport>60000)await report();
     return;
    }
+   await openScoreCheckpoint(token);
    members=await roster(household,lastGame.map_id);
    await answerPopup(token,lastGame);
    await savePeriodicReport(token);
@@ -1104,6 +1231,7 @@
    if(sim.is_paused){
     status=blockedPopup&&blockedPopup.length?'팝업 대기: '+(blockedPopup[0].popup_id||'이름 없음'):'게임 일시정지 중';
     if(Date.now()-lastReport>60000)await report();
+    if(state.enabled)await saveScoreCheckpoint();
     return;
    }
    if(state.enabled&&(!calendar||calendar.day!==time.day||calendar.city!==lastGame.map_id)){
@@ -1145,6 +1273,7 @@
    lastSelected=selectedNow;expectedSelected=null;
    errors=0;firstError=0;lastCycle=Date.now();
    if(Date.now()-lastReport>60000)await report();
+   if(state.enabled)await saveScoreCheckpoint();
    await saveMirror();
   }catch(e){
    status=String(e.message||e);log(status);
@@ -1218,6 +1347,7 @@
   mirrorStopped=true;pendingResume=false;
   if(state.enabled){Score.house(state,nowMinute,'stop');state.enabled=false;epoch++;log('자동 명령 중지.');}
   saveMirror(true);
+  saveScoreCheckpoint(true);
  };
  document.getElementById('report').onclick=function(){report(true).then(function(){log('수동 진단 저장 완료: saved/observer-report.cfg');}).catch(function(e){log('진단 저장 실패: '+e.message);});};
  window._onStateLoaded=function(){
@@ -1226,13 +1356,14 @@
   lastPendingPoll=0;queueSampleAt={};
   lastPopup=null;blockedPopup=null;popupTries=0;nextPopupTry=0;scheduleCancel=null;
   life.reset();panels.reset();care.reset();gathering.reset();vocation.reset();claims.reset();popupTrack=null;lastSelected=null;expectedSelected=null;
-  pendingResume=true;pausedUntil=0;errors=0;firstError=0;nextPeriodicSave=0;
+  pendingResume=true;pausedUntil=0;errors=0;firstError=0;nextPeriodicSave=0;scoreStore=null;
   log('저장된 관찰 설정을 불러왔습니다. 목표와 현재 게임 상태를 다시 확인합니다.');
  };
  log(VERSION+' 준비. 다른 작업 모드와 행동 결과를 확인합니다.');
+ document.getElementById('title-text').textContent='Zoi Observer '+VERSION;
  render();
  // 0.4.7: a running copy can be stopped so new script files load in place (live update, no save/load).
- var loopTimers=[setInterval(cycle,10000),setInterval(watchChoice,1500)], firstCycle=setTimeout(cycle,2500);
+ var loopTimers=[setInterval(cycle,10000),setInterval(function(){if(gameSpeed>=2&&cycleDue())cycle();},1000),setInterval(watchChoice,1500)], firstCycle=setTimeout(cycle,2500);
  window.ZoiObserverShutdown=function(){
   loopTimers.forEach(clearInterval);clearTimeout(firstCycle);epoch++;
   log('새 버전 코드로 교체합니다. 자동 관리 상태는 그대로 이어집니다.');

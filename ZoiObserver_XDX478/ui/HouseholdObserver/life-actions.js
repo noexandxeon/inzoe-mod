@@ -70,7 +70,7 @@
     return {object:o,dist:Math.hypot(w.x-position.x,w.y-position.y,w.z-position.z)};
    }).sort(function(a,b){return a.dist-b.dist;}).slice(0,limit||5).map(function(o){return o.object;});
   }
-  async function objectAction(member,objects,choose,token,offers){
+  async function objectAction(member,objects,choose,token,offers,scope){
    var id=String(member.entity_id);
    for(var i=0;i<objects.length;i++){
     var target=String(objects[i].entity_id), available, self=target===id;
@@ -94,6 +94,15 @@
       !(playing&&playing.interaction_bag_id===a.interaction_bag_id&&String(playing.target_entity_id)===target);
     }),target);
     if(!action)continue;
+    if(scope){
+     if(!scope.carried){
+      try{if(entity((await readAt(target)).locatedSiteId)!==scope.site)continue;}
+      catch(_){continue;}
+     }
+     if(entity((await readAt(id)).locatedSiteId)!==scope.site||
+        !L.relaxed(await cli('interaction.get_queue',{entity_id:id})))return null;
+     if(scope.work&&(await readAt(id,'RabbitHole')).currentRabbitHoleId!=='None')return null;
+    }
     var run={entity_id:id,interaction_bag_id:action.interaction_bag_id};
     // In game the Self_ action only counted with target=self (야망 2/3); without a target it queued but never ran.
     run.target_entity_id=target;
@@ -110,6 +119,14 @@
    var observed=api.snapshot&&api.snapshot(id), playing=observed&&observed.queue&&observed.queue.current;
    if(playing&&L.TRAVEL.test(playing.interaction_bag_id||''))return false;
    if((api.queued?api.queued(id):[]).some(function(b){return L.TRAVEL.test(b);}))return false;
+   // 0.6.16: the game's own "move right away" instead of the walk. In game most of a free day went into walking
+   // between places, and nothing can be queued while a Zoi is on the way. Falls back to the walk if refused.
+   // The jump lands at the edge of the place (tested in game: 'Teleported to Gangnam_Business_Cafe', not yet inside),
+   // so the usual walk is still requested after it and only covers the last steps.
+   try{
+    var place=(await currentSites()).find(function(s){return Number(s.entity_id)===Number(target);});
+    if(place&&place.id)await write('movement.teleport',{entity_id:id,destination:String(place.id)},token);
+   }catch(_){}
    var descriptor=await cli('movement.get_site_move_interaction',{entity_id:id,target_entity_id:String(target)});
    if(descriptor.execution_tool!=='interaction.execute'||String(descriptor.entity_id)!==id||
       Number(descriptor.target_entity_id)!==Number(target)||descriptor.requires_zoi_group||!descriptor.interaction_bag_id)return false;
@@ -122,27 +139,121 @@
    var home=entity(family.residanceSiteId)||entity(character.boundSiteId);
    return home>0?home:0;
   }
+  async function carriedMeals(character){
+   var pocket=entity(character.inventoryEntityId), meals=[];
+   if(!(pocket>0))return meals;
+   var inventory=await readAt(pocket);
+   for(var ref of (inventory.ownedEntityIds||[]).slice(0,8)){
+    try{
+     var id=entity(ref), item=await readAt(id);
+     if(item.carriableObjectType==='Food')meals.push({entity_id:id});
+    }catch(_){}
+   }
+   return meals;
+  }
+  function mealKey(bag,target){return bag+':'+target;}
+  function mealContinues(queue){
+   return queue.current&&/^Next_Food_(?:Start_Eat|CleanUp)(?:_|$)/i.test(queue.current.interaction_bag_id);
+  }
+  function mealAvailable(decision,action,target,minute){
+   var retry=decision.mealCooldown&&decision.mealCooldown[mealKey(action.interaction_bag_id,target)];
+   return !retry||minute<retry.at||minute>=retry.until;
+  }
+  function rememberNeed(decision,need,action,minute){
+   var receipt={key:need.key,bag:action.interaction_bag_id,target:String(action.observer_target),minute:minute,at:Date.now()};
+   decision.needPending=receipt;
+   if(need.key==='Hunger'){
+    receipt.before=need.pct;
+    decision.mealAttempt=receipt;
+   }
+  }
+  function reviewMeal(member,decision,snapshot,minute){
+   var p=decision.mealAttempt;
+   if(!p)return;
+   var hunger=snapshot.stats.stats.Hunger, pct=hunger&&hunger.pct, age=minute-p.minute;
+   if(!Number.isFinite(pct))return;
+   var key=mealKey(p.bag,p.target), old=decision.mealCooldown;
+   if(age>=0&&pct-p.before>=8){
+    if(old)delete old[key];
+    log(named(member)+': 식사 요청 뒤 배고픔 회복 확인 '+p.before+'% → '+pct+'%');
+   }else if(age>=0){
+    var action=R.actionState(snapshot.queue,p);
+    if(action==='queued'||action==='playing'||action==='unknown'&&age<90||mealContinues(snapshot.queue)||
+       R.awaitingStart(Date.now(),minute,p.at,p.minute))return;
+    var cooldown=decision.mealCooldown||(decision.mealCooldown={});
+    cooldown[key]={at:minute,until:minute+90};
+    Object.keys(cooldown).sort(function(a,b){return cooldown[b].at-cooldown[a].at;}).slice(6).forEach(function(k){delete cooldown[k];});
+    log(named(member)+': 식사 요청 뒤 배고픔 회복 미확인 · 다른 음식 확인 / '+p.bag);
+   }
+   decision.mealAttempt=null;
+   if(decision.needPending&&decision.needPending.at===p.at&&decision.needPending.bag===p.bag&&decision.needPending.target===p.target)
+    decision.needPending=null;
+  }
   async function needs(member,character,decision,snapshot,minute,token){
-   var need=L.urgentNeed(snapshot.stats.stats);
+   // A bedtime need that could not be met here (no food, no toilet) is not chased: sleep goes ahead for 2 game hours.
+   reviewMeal(member,decision,snapshot,minute);
+   var need=minute>=(decision.bedtimeSkip||0)||minute<(decision.bedtimeSkip||0)-120?L.bedtimeNeed(snapshot.stats.stats):L.urgentNeed(snapshot.stats.stats);
+   var work=snapshot.work, location=entity(character.locatedSiteId), hunger=snapshot.stats.stats.Hunger;
+   var atWork=work.is_at_work||work.is_working_time&&location>0&&location===work.work_site_id;
+   if(atWork){
+    var toilet=snapshot.stats.stats.Toilet;
+    need=L.urgentNeed({Hunger:hunger&&hunger.pct<=18?hunger:null,Toilet:toilet&&toilet.pct<=15?toilet:null});
+   }
+   var prework=!need&&work.has_job&&work.is_working_day&&work.is_commute_time&&!work.is_working_time&&!work.is_at_work&&
+    location>0&&location===work.home_site_id&&hunger&&hunger.pct<=50&&L.relaxed(snapshot.queue);
+   if(prework)need={key:'Hunger',pct:hunger.pct};
    if(!need){
     decision.needFallback=null;
+    // Kept while fresh: an early (routine) request still counts if the need turns urgent before it is eaten.
+    var kept=decision.needPending;
+    if(kept&&!(minute>=kept.minute&&minute-kept.minute<90))decision.needPending=null;
     return false;
    }
-   if(!L.goalReady(snapshot.queue,snapshot.work)||minute<(decision.nextNeed||0)||snapshot.work.is_at_work)return false;
+   if(need.key==='Hunger'&&(decision.mealAttempt||mealContinues(snapshot.queue))){
+    decision.needFallback=null;
+    if(decision.catLow&&decision.catLow.Hunger!=null)decision.catLow.Hunger=minute;
+    return true;
+   }
+   // 0.6.4: one fix per need at a time. In game (5x speed) the 25-minute retry came round every 10 real seconds,
+   // before the Zoi had reached the fridge: soup, bibimbap and noodles were queued back to back and the
+   // emergency donut was bought while the meals were still waiting.
+   var pending=decision.needPending;
+   if(pending&&pending.key===need.key&&minute>=pending.minute&&minute-pending.minute<90&&
+      (R.actionState(snapshot.queue,pending)!=='unseen'||R.awaitingStart(Date.now(),minute,pending.at,pending.minute))){
+    decision.needFallback=null;
+    if(decision.catLow&&decision.catLow[need.key]!=null)decision.catLow[need.key]=minute;
+    return true;
+   }
+   decision.needPending=null;
+   if(!L.goalReady(snapshot.queue,work)||minute<(decision.nextNeed||0))return false;
+   var onSite=atWork&&work.simulated!==false&&location>0&&location===work.work_site_id&&L.relaxed(snapshot.queue);
+   if(atWork&&!onSite)return false;
    decision.nextNeed=minute+25;
-   var home=await homeMember(member,character), location=entity(character.locatedSiteId);
+   var home=onSite?work.home_site_id:await homeMember(member,character), action;
    var local=await inventory(member,character);
    if(local){
     var eligible=local.objects.filter(function(o){return L.fixtureMatches(need.key,o.table_id);});
     var ordered=closest(eligible,character,/.*/,5);
-    var action=await objectAction(member,ordered,function(items){return L.needChoice(need.key,items);},token);
-    if(action){
-     if(need.key==='Hunger')decision.noMeal=0;
-     decision.needFallback=null;
-     log(named(member)+'의 '+(snapshot.stats.stat_names[need.key]||need.key)+' 해결 요청: '+action.display_name);return true;
-    }
-    if(need.key==='Hunger'&&location===home)decision.noMeal=minute+40;
+    action=await objectAction(member,ordered,function(items,target){
+     return L.needChoice(need.key,need.key==='Hunger'?items.filter(function(a){return mealAvailable(decision,a,target,minute);}):items);
+    },token,null,onSite?{site:location,work:true}:null);
    }
+   if(!action&&onSite&&need.key==='Hunger'){
+    var meals=await carriedMeals(character);
+    action=await objectAction(member,meals,function(items,target){return items.find(function(a){
+     return a.enabled===true&&mealAvailable(decision,a,target,minute)&&/^(?:Eat_|(?:Object_)?Food_Eat|Object_.*_Eat)/i.test(a.interaction_bag_id);
+    });},token,null,{site:location,work:true,carried:true});
+   }
+   if(action){
+    if(need.key==='Hunger')decision.noMeal=0;
+    decision.needFallback=null;
+    rememberNeed(decision,need,action,minute);
+    var prefix=onSite?'근무지 내 ':prework?'출근 전 ':need.bedtime?'잠들기 전 ':'';
+    log(named(member)+'의 '+prefix+((snapshot.stats.stat_names||{})[need.key]||need.key)+' 해결 요청: '+action.display_name);return true;
+   }
+   if(onSite)return false;
+   if(local&&need.key==='Hunger'&&location===home)decision.noMeal=minute+40;
+   if(need.bedtime){decision.bedtimeSkip=minute+120;decision.nextNeed=minute;return false;}
    if(home>0&&location!==home&&(need.key!=='Cleanliness'||need.pct<=12)&&await move(member,home,token)){
     if(decision.outing&&decision.outing.goalVisit)decision.outing=null;
     decision.needFallback=null;
@@ -152,19 +263,63 @@
    return false;
   }
   // 0.4.7: shower or eat at home before the need turns urgent, at most once per 2 game hours per need.
+  // 0.6.20: something worth doing when the Zoi stands idle: practise a skill the Zoi already has or is building
+  // (the ambition's or a hope's), otherwise a pastime for a low Fun need. Only objects at the current place,
+  // nothing that spends money, sells, breaks or harms.
+  var LEISURE_SKIP=/Sell|Buy|Purchase|Order|Delete|Destroy|Break|Kick|Steal|Prank|Karma|Throw|Upgrade|PickUp|Pick_Up|Move|Repair|Clean|Mop|Wash|Toilet|Shower|Bath|Bed_|Sleep|Nap|Eat|Fridge|Food|Drink|Cook_Meal|Serve|Dump|Dirty|Turn_?Off|Off_|Lock|Unlock|Door|Window|Light|Fire|Burn|Pee|Fart|Cry|Angry|Fight|Rob|Hack|Scam|Smoke|Alcohol|Beer|Soju|Wine/i;
+  var LEISURE_FUN=/TV|Audio|Speaker|Radio|Game|Console|Arcade|Movie|Music|Dance|Guitar|Piano|Drum|Violin|Book|Read|Chess|Puzzle|Painting|Paint|Draw|Sing|Karaoke|Write|Computer_Use|Laptop|Exercise|Workout|Pushup|Situp|Yoga|Treadmill|Dumbbell|Boxing|Meditat|Garden|Plant|Fish/i;
+  async function leisure(member,character,decision,snapshot,skills,minute,token){
+   if(!L.idleNow(snapshot.queue,snapshot.work)||minute<(decision.nextLeisure||0))return false;
+   decision.nextLeisure=minute+20;
+   var local=await inventory(member,character);
+   if(!local)return false;
+   var stats=snapshot.stats&&snapshot.stats.stats||{};
+   var fun=stats.Fun&&Number.isFinite(stats.Fun.pct)?stats.Fun.pct:100;
+   var wanted=(skills||[]).filter(function(s){return s&&s.skill_id;}).sort(function(a,b){return (b.level||0)-(a.level||0);})
+    .map(function(s){return String(s.skill_id).replace(/^Skill_?/i,'');}).filter(Boolean).slice(0,4);
+   var recent=decision.leisureRecent||(decision.leisureRecent=[]);
+   var objects=closest(local.objects.filter(function(o){return LEISURE_FUN.test(o.table_id||'');}),character,/.*/,8);
+   var action=await objectAction(member,objects,function(items){
+    var ok=items.filter(function(a){
+     var key=(a.interaction_bag_id||'')+' '+(a.display_name||'');
+     return !LEISURE_SKIP.test(a.interaction_bag_id||'')&&LEISURE_FUN.test(key)&&recent.indexOf(a.interaction_bag_id)<0;
+    });
+    var score=function(a){
+     var key=a.interaction_bag_id||'', s=0;
+     wanted.forEach(function(w,i){if(w&&key.toLowerCase().indexOf(w.toLowerCase())>=0)s+=8-i;});
+     if(fun<50&&/TV|Audio|Game|Console|Movie|Music|Dance|Book|Read/i.test(key))s+=4;
+     if(/Practice|Study|Train|Workout|Exercise|Pushup|Yoga|Write|Paint|Guitar|Piano|Chess|Computer_Use/i.test(key))s+=3;
+     return s;
+    };
+    return ok.sort(function(a,b){return score(b)-score(a);})[0]||null;
+   },token);
+   if(!action)return false;
+   recent.push(action.interaction_bag_id);
+   if(recent.length>4)recent.shift();
+   decision.nextLeisure=minute+45;
+   log(named(member)+': 빈 시간 활용 / '+(action.display_name||action.interaction_bag_id));
+   return true;
+  }
   async function routine(member,character,decision,snapshot,minute,token){
    var need=L.routineNeed(snapshot.stats.stats);
    if(!need||!L.goalReady(snapshot.queue,snapshot.work)||snapshot.work.is_at_work||snapshot.work.is_working_time||snapshot.work.is_commute_time)return false;
    var timers=decision.routineNext||(decision.routineNext={});
    if(minute<(timers[need.key]||0))return false;
    timers[need.key]=minute+120;
+   var waiting=decision.needPending;
+   if(need.key==='Hunger'&&(decision.mealAttempt||mealContinues(snapshot.queue)))return false;
+   if(waiting&&waiting.key===need.key&&minute>=waiting.minute&&minute-waiting.minute<90)return false;
    var home=await homeMember(member,character);
    if(!(home>0)||entity(character.locatedSiteId)!==home)return false;
    var local=await inventory(member,character);
    if(!local)return false;
    var eligible=local.objects.filter(function(o){return L.fixtureMatches(need.key,o.table_id);});
-   var action=await objectAction(member,closest(eligible,character,/.*/,5),function(items){return L.needChoice(need.key,items);},token);
+   var action=await objectAction(member,closest(eligible,character,/.*/,5),function(items,target){
+    return L.needChoice(need.key,need.key==='Hunger'?items.filter(function(a){return mealAvailable(decision,a,target,minute);}):items);
+   },token);
    if(!action)return false;
+   // 0.6.4: the early meal counts as the fix when the need turns urgent a moment later (in game: soup, then bibimbap 15 s on).
+   rememberNeed(decision,need,action,minute);
    log(named(member)+': '+(snapshot.stats.stat_names&&snapshot.stats.stat_names[need.key]||need.key)+' '+need.pct+'% · 미리 해결 요청: '+action.display_name);
    return true;
   }
@@ -317,14 +472,24 @@
    var summary=(listed.skills||[]).find(function(s){return s.id===skillId;});
    return summary&&Number.isFinite(summary.level)?{skill:skillId,level:summary.level}:null;
   }
+  function observeGoalAction(decision,queue,minute){
+   var goal=decision.goal;
+   if(!goal)return 'unseen';
+   var action=R.actionState(queue,goal);
+   if(action==='playing'){
+    goal.seen=true;
+    if(!L.TRAVEL.test(goal.bag))M.observed(decision,goal,minute);
+   }
+   return action;
+  }
   async function reviewGoal(member,decision,snapshot,minute){
    if(!decision.goal)return;
    var goal=decision.goal;
-   var action=R.actionState(snapshot.queue,goal), playing=action==='playing';
-   if(playing)goal.seen=true;
+   var action=observeGoalAction(decision,snapshot.queue,minute), playing=action==='playing';
    var data=await readAt(member.entity_id,'Mission');
    var mission=data.missionMap&&data.missionMap['(Value='+goal.instance+')'];
    var ambition=goal.kind==='ambition', label=ambition?'야망 목표':'소망';
+   if(!ambition&&!mission&&!snapshot.hope)return;
    var plans=ambition&&decision.ambition?decision.ambition.plans:decision.goalPlans;
    var plan=(plans||[]).find(function(p){return p.instance===goal.instance&&p.name===goal.name;})||goal;
    var progress=missionProgress(mission);
@@ -362,7 +527,14 @@
     decision.nextHopeAction=minute;
     if(ambition)decision.nextAmbition=minute;
    }else if(!ambition&&snapshot.hope&&!snapshot.hope.selected.some(function(h){return h.hope_id===goal.name;})){
-    var verdict=M.gone(M.record(decision,plan,minute),minute);
+    var listed=snapshot.hope.selected, memory0=decision.goalMemory||{};
+    var together=Object.keys(memory0).filter(function(k){
+     var it=memory0[k];
+     return it.kind==='hope'&&!/^(?:completed|ended)$/.test(it.phase)&&!(Number.isFinite(it.expire)&&minute>=it.expire)&&
+      !listed.some(function(h){return h.hope_id===it.name;});
+    }).length;
+    var leftItem=M.record(decision,plan,minute), verdict=M.gone(leftItem,minute,together);
+    leftItem.leftAt=minute;
     M.note(decision,plan,verdict.phase,verdict.reason,'새 목표 확인',minute);
     if(verdict.phase==='completed')M.flow(decision,plan,'done',{},minute);
     log(named(member)+(verdict.phase==='completed'?': 소망 완료 / ':': 소망 종료 / ')+goal.name+' · '+verdict.reason);
@@ -533,8 +705,34 @@
   function venueKey(condition){return (api.game().map_id||'')+':'+condition.conditionId1;}
   function venueNote(plan,condition,site,hit,minute){
    var book=venueBook(), key=venueKey(condition), entry=book[key]||(book[key]={hits:{},misses:{}});
-   if(hit){entry.hits[site]=minute;delete entry.misses[site];}
-   else entry.misses[site]=minute;
+   // 0.6.14: a place that keeps having nothing for this condition is retried less and less often
+   // (in game the library was visited for the same hope again every third day and never had the action).
+   var counts=entry.missCount||(entry.missCount={});
+   if(hit){entry.hits[site]=minute;delete entry.misses[site];delete counts[site];}
+   else{entry.misses[site]=minute;counts[site]=(counts[site]||0)+1;}
+  }
+  async function fishingGear(character,decision,minute){
+   var previous=decision.fishingGear, pocket=entity(character.inventoryEntityId);
+   if(previous&&minute>=previous.minute&&minute-previous.minute<30)return previous.owned;
+   if(!(pocket>0))return null;
+   try{
+    var inventory=await readAt(pocket);
+    if(!Array.isArray(inventory.ownedEntityIds))return null;
+    var ids=inventory.ownedEntityIds.map(entity), held=entity(character.usingCarriableObject), known=true;
+    if(held>0&&ids.indexOf(held)<0)ids.push(held);
+    for(var id of ids){
+     try{
+      var item=await readAt(id), definition=item.objectTableId&&await row('Object',item.objectTableId);
+      var tags=(item.entityTags||[]).concat(item.runtimeObjectTags||[],definition&&definition.objectTags||[]);
+      if(tags.some(function(tag){return /^FishingRod$/i.test(tag);})){
+       decision.fishingGear={minute:minute,owned:true};return true;
+      }
+      if(!definition)known=false;
+     }catch(_){known=false;}
+    }
+    if(!known)return null;
+    decision.fishingGear={minute:minute,owned:false};return false;
+   }catch(_){return null;}
   }
   // Only visit a place with a goal-specific facility clue or a previously observed action.
   async function recoverGoal(member,character,decision,snapshot,time,minute,token,plan,condition,bags,nativeTags){
@@ -561,10 +759,15 @@
     var info=(await row('Site',site.id)).defaultInfo;
     if(!info||info.bDisabled||info.bDevOnly||!/^(?:Business|Public)$/.test(info.siteType))continue;
     var siteTags=info.tags||[];
+    if(condition.conditionId1==='Preference_Coffee'&&/DrinkCoffee/i.test(plan.name)&&!entry.hits[site.entity_id]&&
+       siteTags.some(function(tag){return /^(?:ClubAndLounge|TPO_Site_Workplace_ClubLounge)$/i.test(tag);}))continue;
+    if(condition.conditionId1==='Ambition_Fishing'&&!entry.hits[site.entity_id]&&
+       siteTags.some(function(tag){return /^FishingShop$/i.test(tag);}))continue;
     if(nativeTags.some(function(tag){return siteTags.indexOf(tag)<0;}))continue;
     if(siteTags.indexOf('Resort_Room')>=0||siteTags.indexOf('Cahaya_DesertIsland')>=0)continue;
     var missed=entry.misses[site.entity_id];
-    if(missed&&minute-missed<3*1440)continue;
+    var again=Math.min(24,3*Math.pow(2,Math.max(0,((entry.missCount||{})[site.entity_id]||1)-1)));
+    if(missed&&minute-missed<again*1440)continue;
     var score=entry.hits[site.entity_id]?100:0;
     if(tags.some(function(group){return group.every(function(t){return siteTags.indexOf(t)>=0;});}))score+=50;
     if(hint&&hint.test(site.id))score+=60;
@@ -590,6 +793,15 @@
    var plans=await prepareGoals(member,decision,minute,snapshot.hope&&snapshot.hope.selected);
    decision.nextHopeAction=minute+18;
    return pursuePlans(member,character,decision,snapshot,time,minute,token,plans,tryConversation);
+  }
+  async function pursueSchoolHope(member,character,decision,snapshot,time,minute,token,site){
+   if(decision.goal||!L.relaxed(snapshot.queue)||minute<(decision.nextSchoolHope||0))return false;
+   var plans=await prepareGoals(member,decision,minute,snapshot.hope.selected);
+   if(!plans.length)return false;
+   decision.nextSchoolHope=minute+15;
+   var sent=await pursuePlans(member,character,decision,snapshot,time,minute,token,plans,null,site);
+   decision.schoolHopeNote=sent?'학교 안에서 소망 행동 요청':'학교에서 지금 실행 가능한 소망 행동 없음';
+   return sent;
   }
   async function prepareAmbition(member,decision,minute){
    if(minute<(decision.nextAmbition||0))return decision.ambition;
@@ -655,8 +867,8 @@
     /Read|Book/i.test(id)?/Book|Shelf|Tablet|Chair|Sofa|Computer/i:/.*/;
   }
   var relationTypes=/^(?:Marriage|NewRelationshipCount|RelationshipCount|TalkInteractionBagTag|InteractionBagCountAtFamilyRelationshipType)$/;
-  async function pursuePlans(member,character,decision,snapshot,time,minute,token,plans,tryConversation){
-   var local, nearby, offers=Object.create(null), missions=plans.length?await readAt(member.entity_id,'Mission'):{};
+  async function pursuePlans(member,character,decision,snapshot,time,minute,token,plans,tryConversation,schoolSite){
+   var local, nearby, schoolPeople, offers=Object.create(null), missions=plans.length?await readAt(member.entity_id,'Mission'):{};
    var used=busyTargets(member);
    var diagnosisContext, environment;
    async function home(){if(local===undefined)local=await inventory(member,character);return local;}
@@ -689,6 +901,16 @@
    // Tries one condition. Returns true when a game action was requested.
    async function attemptCondition(plan,condition,progress,label,retry,prepFor){
     var memory=M.record(decision,plan,minute), type=condition.conditionType;
+    if(schoolSite&&!isInteractionGoal(type))return false;
+    if(condition.conditionId1==='Ambition_Fishing'){
+     var rod=await fishingGear(character,decision,minute);
+     if(rod!==true){
+      var equipment=rod===false?'소지품에 낚싯대 없음':'낚싯대 보유 확인 대기';
+      R.block(memory,rod===false?'missing':'unknown',minute,equipment);
+      M.note(decision,plan,'waiting',equipment,'낚싯대 보유 상태 재확인',minute);
+      return false;
+     }
+    }
     var practice=type==='SkillLevel'?await ensureTraining(condition.conditionId1):null;
     var skillBaseline=null;
     if(practice){
@@ -717,12 +939,18 @@
     // 0.4.7: the game tags the actions that count for a hope/ambition with Mission_<name>
     // (e.g. MovieScreen_WatchMovie carries Mission_Hope_HouseholdBiz_21). Use them when the condition id finds nothing.
     if(!practice&&!bags.length&&plan.name)bags=await matchGoalBags('Mission_'+plan.name);
+    // Preference_Coffee also tags books and smelling coffee. A drinking wish needs consumption.
+    if(condition.conditionId1==='Preference_Coffee'&&/DrinkCoffee/i.test(plan.name)){
+     bags=bags.filter(function(b){return /(?:^|_)Drink(?:_|$)|^BuyAndEat_ServedCoffee|^Object_Order_Coffee_Lounge$/i.test(b);});
+    }
     if(!practice&&!bags.length){
+     if(schoolSite)return false;
      M.note(decision,plan,'unsupported','실행 연결 대기 / '+type+' '+condition.conditionId1,
       '게임에서 가능한 실행 경로 확인',minute);return false;
     }
     if(!practice)M.flow(decision,plan,memory.prep&&memory.prep.grown?'retry':'need',{need:memory.flow&&memory.flow.need||condition.conditionId1},minute);
-    var place=await home();
+    var schoolTalk=schoolSite&&!plan.requiresTarget&&bags.length&&bags.every(function(b){return /^(?:Co_|Coop_|Talk)/i.test(b);});
+    var place=schoolTalk||schoolSite&&plan.requiresTarget?null:await home();
     var items=place?place.objects:[];
     var targets=plan.requiresTarget?(plan.target>0?[{entity_id:plan.target}]:[]):closest(items,character,goalPattern(practice,condition.conditionId1),20);
     // 0.4.7: objects that match the action come first, wherever they stand in the house.
@@ -730,6 +958,15 @@
     if(hint){
      var fitting=closest(items,character,hint,8);
      targets=fitting.concat(targets.filter(function(t){return fitting.indexOf(t)<0;})).slice(0,20);
+    }
+    if(schoolTalk&&String(api.game().possessed_entity_id)===String(member.entity_id)){
+     if(schoolPeople===undefined){
+      try{
+       var people=await cli('entity.scan_characters',{Radius:25,Limit:10,ref:'pawn'});
+       schoolPeople=(people.Characters||people.characters||[]).filter(function(p){return String(p.entity_id)!==String(member.entity_id);});
+      }catch(_){schoolPeople=[];}
+     }
+     targets=schoolPeople.concat(targets);
     }
     if(plan.requiresTarget&&plan.target>0){
      try{
@@ -740,7 +977,7 @@
       }
      }catch(_){}
     }
-    if(!plan.requiresTarget&&!targets.length&&String(api.game().possessed_entity_id)===String(member.entity_id)){
+    if(!schoolTalk&&!plan.requiresTarget&&!targets.length&&String(api.game().possessed_entity_id)===String(member.entity_id)){
      if(nearby===undefined){
       var searching=decision.outing&&decision.outing.goalVisit&&decision.outing.arrived;
       try{nearby=(await cli('entity.scan_objects',{Radius:searching?70:30,Limit:searching?45:22,ref:'pawn'})).objects||[];}
@@ -751,12 +988,12 @@
     var found=targets.length;
     targets=targets.filter(function(t){return !used[String(t.entity_id)];});
     var occupied=found>0&&!targets.length;
-    if(!plan.requiresTarget&&(/_Self(?:_|$)/i.test(plan.name)||bags.some(function(b){return /^Self_/i.test(b);}))){
+    if(!schoolSite&&!plan.requiresTarget&&(/_Self(?:_|$)/i.test(plan.name)||bags.some(function(b){return /^Self_/i.test(b);}))){
      targets=[{entity_id:member.entity_id}].concat(targets);
      offers[String(member.entity_id)]={interactions:bags.filter(function(b){return /^Self_/i.test(b);})
       .map(function(b){return {interaction_bag_id:b,enabled:true,display_name:bagNames[b]||b};})};
     }
-    if(!plan.requiresTarget&&place&&L.goalVenueTags(plan.name,condition.conditionId1).length)
+    if(!schoolSite&&!plan.requiresTarget&&place&&L.goalVenueTags(plan.name,condition.conditionId1).length)
      targets=targets.concat({entity_id:place.site.entity_id});
     var disabled=[], action;
     function wanted(a){return practice?practice[1].test(a.interaction_bag_id):bags.indexOf(a.interaction_bag_id)>=0;}
@@ -768,7 +1005,7 @@
       });
       if(!pick)choices.forEach(function(a){if(a.enabled===false&&wanted(a)&&disabled.length<6)disabled.push({action:a,target:target});});
       return pick;
-     },token,offers);
+     },token,offers,schoolSite?{site:schoolSite}:null);
     }catch(e){
      if(e.observerBag)M.failed(decision,plan,e.observerBag,e.observerTarget,minute,'게임 행동 응답 확인 필요 / '+e.message);
      else{
@@ -786,9 +1023,10 @@
       decision.goal.venue={site:decision.outing.site,condition:condition.conditionId1};
      }
      if(!practice)M.flow(decision,plan,'confirm',{},minute);
-     log(named(member)+'의 '+label+' 행동 요청: '+action.display_name+(prepFor?' (준비: '+prepFor+')':''));
+     log(named(member)+'의 '+(schoolSite?'학교 ':'')+label+' 행동 요청: '+action.display_name+(prepFor?' (준비: '+prepFor+')':''));
      return true;
     }
+    if(schoolSite)return false;
 
     var nativeTags=[], dataItem=null;
     if(!practice&&!occupied&&bags.length){
@@ -879,20 +1117,20 @@
     }
     var memory=M.record(decision,plan,minute);
     // 0.6.0: a hope stuck in preparation steps aside so the others get their turn; an ambition starts its search over.
-    var stall=M.stalled(decision,plan,minute);
+    var stall=!schoolSite&&M.stalled(decision,plan,minute);
     if(stall){
      if(decision.goalRetry)delete decision.goalRetry[plan.name];
      log(named(member)+': '+label+' '+(plan.label||plan.name)+' / '+(stall==='park'?'오래 막혀 다른 소망을 먼저 진행':'오래 막혀 필요 조건을 다시 확인'));
      if(api.score)api.score({minute:minute,zoi:String(member.entity_id),kind:'blocked',reason:'stalled',name:plan.name});
     }
-    if(plan.kind!=='ambition'&&M.parked(memory,minute)){plan.status='오래 막힘 · 다른 소망을 먼저 진행';continue;}
+    if(!schoolSite&&plan.kind!=='ambition'&&M.parked(memory,minute)){plan.status='오래 막힘 · 다른 소망을 먼저 진행';continue;}
     if(memory.block&&memory.block.until>minute&&/^(?:sleeping|busy)$/.test(memory.block.kind)){
      plan.status=memory.block.label+' · '+memory.block.next;continue;
     }
     var retry=decision.goalRetry&&decision.goalRetry[plan.name];
     // A preparation step (e.g. an inferred missing skill) runs before the original condition.
     var prep=memory.prep&&memory.prep.kind==='skill'&&!memory.prep.grown&&(plan.kind==='ambition'||minute-memory.prep.since<3*1440)?memory.prep:null;
-    if(prep&&await ensureTraining(prep.skill)){
+    if(!schoolSite&&prep&&await ensureTraining(prep.skill)){
      if(await attemptCondition(plan,{conditionType:'SkillLevel',conditionId1:prep.skill},progress,label,retry,plan.name))return true;
      // No practice was possible right now: still look at the original condition, which may have opened up.
     }
@@ -900,13 +1138,18 @@
      var condition=plan.conditions[j], type=condition.conditionType;
      var count=progress&&progress.conditionStates&&progress.conditionStates[j];
      if(count&&count.compareType==='GreaterOrEqual'&&count.currentCount>=count.goalCount)continue;
+     if(schoolSite){
+      if(await attemptCondition(plan,condition,progress,label,retry,null))return true;
+      continue;
+     }
      if(type==='EnterSiteCount'||type==='EnterSiteTagCount'){
+      if(decision.outing){plan.status='현재 외출을 마친 뒤 목적지 재검토';continue;}
       var site=await visitForGoal(member,character,condition,snapshot,time,token);
       plan.status=site?'목적지로 이동 중':'여유 시간 또는 이용 가능한 목적지 대기';
       if(site){
        trackGoal(decision,plan,'LLM_WalkToSite',site.entity_id,minute,progress);
        M.flow(decision,plan,'confirm',{need:'장소 방문',prep:'외출'},minute);
-       decision.outing={site:site.entity_id,name:site.l10n||site.id,start:minute};
+       decision.outing={site:site.entity_id,name:site.l10n||site.id,start:minute,goalVisit:plan.name};
        log(named(member)+'의 '+label+' 외출: '+decision.outing.name);return true;
       }
       continue;
@@ -918,7 +1161,8 @@
       }
       if(await meetForGoal(member,character,decision,snapshot,time,minute,token,plan,condition))return true;
       plan.status='관계·대화 조건 또는 상대 대기';
-      M.note(decision,plan,'waiting',plan.status,'기억한 상대와 재회 또는 사람이 있는 장소 방문',minute);
+      M.note(decision,plan,'waiting',plan.status,plan.requiresTarget?'게임에서 지정한 상대가 있는 장소에서 재확인':
+       '기억한 상대와 재회 또는 사람이 있는 장소 방문',minute);
       continue;
      }
      if(await attemptCondition(plan,condition,progress,label,retry,null))return true;
@@ -930,6 +1174,8 @@
   async function meetForGoal(member,character,decision,snapshot,time,minute,token,plan,condition){
    if(decision.outing||L.urgentNeed(snapshot.stats.stats)||snapshot.work.is_at_work||snapshot.work.is_working_time||
       snapshot.work.is_commute_time||time.hour<9||time.hour>=20)return false;
+   var target=plan.requiresTarget?String(plan.target):null;
+   if(target&&!(plan.target>0))return false;
    if(decision.meetDay!==time.day){decision.meetDay=time.day;decision.meetings=0;}
    if(decision.meetings>=2)return false;
    var actor=String(member.entity_id), location=entity(character.locatedSiteId), catalog=await currentSites(), life=decisions();
@@ -942,7 +1188,7 @@
     return info&&!info.bDisabled&&!info.bDevOnly&&/^(?:Business|Public)$/.test(info.siteType)?site:null;
    }
    if(condition.conditionType!=='NewRelationshipCount'){
-    var known=Rel.reunion(life,actor,minute,[]);
+    var known=target?[target]:Rel.reunion(life,actor,minute,[]);
     for(var i=0;i<known.length;i++){
      var other;
      try{other=await readAt(known[i]);}catch(_){continue;}
@@ -960,6 +1206,7 @@
      return true;
     }
    }
+   if(target)return false;
    var last=decision.lastSocialSite;
    var venue=L.leisureSite(catalog,P.traits((api.snapshot(member.entity_id)||snapshot).trait||{}),last);
    if(!venue||venue.entity_id===location||!await publicSite(venue.entity_id))return false;
@@ -1009,7 +1256,9 @@
      if(c.conditionType==='InteractionBagCountAtFamilyRelationshipType')continue;
      var bags=await matchGoalBags(c.conditionId1);
      var chosen=available.find(function(a){return usable(a)&&bags.indexOf(a.interaction_bag_id)>=0&&
-      !/(?:Marriage|Propose|Confession)/i.test(a.interaction_bag_id);});
+      !/(?:Marriage|Propose|Confession)/i.test(a.interaction_bag_id)&&
+      // Harm asked for by an ambition goes to strangers only, never to someone the Zoi is getting close to.
+      !(Rel.hostile(a)&&Rel.spared(relationship));});
      if(chosen)return {action:chosen,plan:plan,progress:goal&&goal.progress};
     }
    }
@@ -1252,12 +1501,15 @@
    return true;
   }
   async function outing(member,character,decision,snapshot,time,minute,token){
-   if((!L.adultAge.test(member.age_group)&&!(decision.outing&&decision.outing.goalVisit))||
-      !L.relaxed(snapshot.queue)||snapshot.work.is_at_work||snapshot.work.is_commute_time||snapshot.work.is_working_time)return false;
+   var trip=decision.outing;
+   var free=L.relaxed(snapshot.queue)&&!snapshot.work.is_at_work&&!snapshot.work.is_commute_time&&!snapshot.work.is_working_time;
+   if(!trip&&(!L.adultAge.test(member.age_group)||!free))return false;
    var location=entity(character.locatedSiteId), home=await homeMember(member,character);
-   if(decision.outing){
-    var trip=decision.outing;
-    if(location===home&&trip.returning){log(named(member)+': 외출 후 귀가 확인');decision.outing=null;return false;}
+   if(trip){
+    if(location===home&&(trip.returning||trip.arrived||minute-trip.start>=240)){
+     if(trip.returning||trip.arrived)log(named(member)+': 외출 후 귀가 확인');
+     decision.outing=null;return false;
+    }
     if(location===trip.site&&!trip.arrived){
      trip.arrived=minute;log(named(member)+': '+trip.name+' 도착 확인');
      if(trip.vacation&&decision.vacation){
@@ -1269,6 +1521,9 @@
       }
      }
     }
+   }
+   if(!free)return false;
+   if(trip){
     if((trip.event?minute>=trip.end||trip.arrived&&minute-trip.arrived>=120:
        trip.arrived&&minute-trip.arrived>=120||time.hour>=19||minute-trip.start>=300)&&
        location!==home&&home>0&&minute>=(trip.nextReturn||0)){
@@ -1280,7 +1535,6 @@
       return true;
      }
     }
-    if(location===home&&!trip.arrived&&minute-trip.start>=240)decision.outing=null;
     return false;
    }
    if(snapshot.work.is_working_day||time.hour<10||time.hour>15||location!==home||minute<(decision.nextOuting||0))return false;
@@ -1490,8 +1744,8 @@
    return fixtures.concat(near);
   }
   function reset(){siteMemory={};sites=null;householdCache={};homeCache={};houseTasks={};repairs={};}
-  return {reset:reset,needs:needs,routine:routine,clean:clean,repair:repair,parcels:parcels,marketNeed:marketNeed,reviewGoal:reviewGoal,trackGoal:trackGoal,prepareGoals:prepareGoals,attend:attend,
-   pursueHope:pursueHope,prepareAmbition:prepareAmbition,pursueAmbition:pursueAmbition,
+  return {reset:reset,needs:needs,routine:routine,leisure:leisure,clean:clean,repair:repair,parcels:parcels,marketNeed:marketNeed,reviewGoal:reviewGoal,observeGoalAction:observeGoalAction,trackGoal:trackGoal,prepareGoals:prepareGoals,attend:attend,
+   pursueHope:pursueHope,pursueSchoolHope:pursueSchoolHope,prepareAmbition:prepareAmbition,pursueAmbition:pursueAmbition,
    affection:affection,goalConversation:goalConversation,meetForGoal:meetForGoal,
    occupation:occupation,sideIncome:sideIncome,outing:outing,socialOuting:socialOuting,ensureTraining:ensureTraining,vacation:vacation,householdPlan:householdPlan,furnish:furnish,move:move,home:homeMember,computers:computers,siteObjects:siteObjects,objectAction:objectAction,knowsSite:knowsSite};
  }

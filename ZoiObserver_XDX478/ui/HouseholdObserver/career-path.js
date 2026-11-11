@@ -134,9 +134,10 @@
   return PATHS[book.path]+' ('+book.pathWhy+') · '+(STEPS[book.step]||book.step)+' — '+book.why+(book.note?' · '+book.note:'');
  }
  var LEAVE=/(?:Career|Job|Work|Company)[A-Za-z_]*(?:Quit|Resign|Retire)|(?:Quit|Resign|Retire)[A-Za-z_]*(?:Career|Job|Work|Company)|퇴사|사직|은퇴|일 그만두/i;
- var FOUND=/(?:Start|Open|Found|Establish|Register|Buy|Purchase)[A-Za-z_]*(?:Biz|Business|Shop|Store)|(?:Biz|Business|Shop|Store)[A-Za-z_]*(?:Start|Found|Establish|Register|Purchase)|창업|사업 시작|사업 등록|가게 차리/i;
+ var FOUND=/(?:Start|Found|Establish|Register)[A-Za-z_]*(?:Biz|Business|Shop|Store)|(?:Biz|Business|Shop|Store)[A-Za-z_]*(?:Start|Found|Establish|Register)|BusinessPlanWriting|창업|사업 시작|사업 등록|가게 차리/i;
  var OPEN=/(?:Biz|Business|Shop|Store)[A-Za-z_]*(?:Open|StartDay|Start_Day|Begin)|(?:Open|StartDay|Begin)[A-Za-z_]*(?:Biz|Business|Shop|Store)|영업 시작|가게 열|개점/i;
- var NOT=/Cancel|Close|EndDay|End_Day|Fail|Feedback|_Sub_|Cheat|Debug|Vacation|취소|종료|마감/i;
+ // 0.6.4 field check: gift/congratulation lines at someone else's retirement, shop purchases and booth names matched before.
+ var NOT=/^Buy_|^Co_Event_|Retirement_\d|선물|축하|Cancel|Close|EndDay|End_Day|Fail|Feedback|_Sub_|Cheat|Debug|Vacation|취소|종료|마감/i;
  function matches(pattern,action){
   var text=(action.interaction_bag_id||'')+' '+(action.display_name||'');
   return pattern.test(text)&&!NOT.test(text);
